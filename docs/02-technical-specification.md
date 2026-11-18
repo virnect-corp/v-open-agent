@@ -545,7 +545,7 @@ devices:
   - token과 refresh token은 각각 `secrets.token_urlsafe(32)`로 만든다. 서버는 각 token의 SHA-256 digest만 메모리에 보관하고 검증 시 `hmac.compare_digest`를 사용한다. 평문, secret, digest를 DB와 로그에 남기지 않는다.
   - access token TTL은 `VOA_TOKEN_TTL_S`, refresh token TTL은 `VOA_REFRESH_TOKEN_TTL_S`다. access token은 WebSocket handshake 시점에 검증하며 이미 인증된 WebSocket은 token 만료로 즉시 종료하지 않는다.
   - `POST /v1/sessions/{session_id}/refresh {refresh_token}`은 세션이 서버 메모리에 있고 refresh token이 유효할 때 `{token, token_expires_at_utc, refresh_token, refresh_token_expires_at_utc}`를 반환한다. 성공 시 이전 token 둘을 즉시 폐기하는 일회성 회전이고, 새 refresh token의 만료 시각은 이 시점부터 다시 계산한다(ADR-0005).
-  - REST `refresh`(token 회전)와 WebSocket `resume(last_alert_seq)`(경고 스트림 이어 받기)는 다른 동작이다. 재접속 순서는 `refresh` → WebSocket `auth` → `resume`이다.
+  - REST `refresh`(token 회전)와 WebSocket `alert_sync(last_alert_seq)`(놓친 경고 동기화)는 다른 동작이다. 재접속 순서는 `refresh` → WebSocket `auth` → `alert_sync`이다(ADR-0006).
   - 서버 프로세스가 재시작하면 token과 세션 엔진을 복원하지 않는다. refresh 요청은 401이고 클라이언트는 장치 credential로 새 세션을 만든다.
   - 인증에 실패하면 401이고, 응답 본문에 원인을 구분하지 않는다.
   - 인증은 통과했지만 `capabilities`가 등록된 `allowed_*`를 벗어나면 400 `capability_not_allowed`다.
@@ -566,7 +566,7 @@ devices:
 | 방향 | type | 필드 |
 |---|---|---|
 | C→S | `auth` | `token` (반드시 첫 메시지. 5초 안에 오지 않거나 실패하면 close 4401) |
-| C→S | `resume` | `last_alert_seq` (auth 다음에만 허용, token 회전은 §7.1 REST endpoint 사용) |
+| C→S | `alert_sync` | `last_alert_seq` (auth 다음에만 허용. 이 번호 이후 alert 중 §7.3 조건을 만족하는 것만 다시 받는다. token 회전은 §7.1 REST `refresh`) |
 | C→S | `observation` | ObservationDraft (서버가 `observation_id`, `server_received_*`, `received_at_utc`를 채운다) |
 | C→S | `ack` | `alert_id`, `status: received\|played` |
 | S→C | `auth_ok` | `session_id`, `server_time_utc` |
@@ -577,11 +577,11 @@ devices:
 | S→C | `heartbeat` | `server_time_utc`, `states: {scenario_id: RiskState}` (`VOA_HEARTBEAT_MS`마다) |
 | S→C | `error` | `code`, `message` (원문 입력을 되돌려 보내지 않음) |
 
-- `resume.last_alert_seq`는 0 이상이다. 아직 alert를 받지 않은 클라이언트는 0을 보낸다.
+- `alert_sync.last_alert_seq`는 0 이상이다. 아직 alert를 받지 않은 클라이언트(처음 연결)는 0을 보낸다.
 - 알 수 없는 type은 `error(code="unsupported_message_type")`, 알려진 type의 schema 오류는 `error(code="rejected_schema")`를 보내고 무시한다.
 - 세션에서 선언하지 않은 `stream_id`의 `observation`(health 포함)은 `error(code="stream_not_declared")`를 보내고 무시한다. 그렇지 않으면 미선언 센서에 health `ok`를 보내 주입된 `not_declared` down 상태를 풀 수 있다(DEV-01, T-R17).
 - `error.message`는 code마다 고정된 문구이고 클라이언트 입력을 담지 않는다.
-- auth 전 다른 메시지, 두 번째 auth, auth 전 resume는 protocol 위반이며 `error(code="protocol_error")` 후 close 4401이다.
+- auth 전 다른 메시지, 두 번째 auth, auth 전 alert_sync는 protocol 위반이며 `error(code="protocol_error")` 후 close 4401이다.
 - JSON 텍스트가 아닌 WebSocket frame은 MVP에서 `unsupported_message_type`으로 무시한다.
 
 **예약 메시지 (MVP 미구현, Stage C/D에서 이 표를 확정)**: C→S `frame`(카메라 이미지), `audio_chunk`(PCM), `imu`(센서 배치), `ptt_start`/`ptt_end`(버튼). MVP 서버는 이 메시지가 오면 `error: unsupported_message_type`을 반환하고 무시한다.
@@ -589,7 +589,7 @@ devices:
 ### 7.3 전달 / ACK / 재접속
 - **alert 전달 상태**: 생성 시 `queued` → WS로 보내면 `sent` → ACK를 받으면 `received` 또는 `played`(played는 received를 포함한다).
 - `valid_until_utc`가 지날 때 상태가 `queued`면 `expired`, `sent`면 `unknown_delivery`로 바꿘다. `received`는 수신 확인 증거가 있으므로 기한 경과로 바꾸지 않고 `played` ACK를 기다린다. `played`는 정상 종료 상태다.
-- **재접속(`resume`)**: `last_alert_seq`보다 큰 alert 중 다음 세 조건을 모두 만족하는 것만 같은 `alert_id`로 다시 보낸다.
+- **경고 동기화(`alert_sync`)**: `last_alert_seq`보다 큰 alert 중 다음 세 조건을 모두 만족하는 것만 같은 `alert_id`와 `alert_seq`로 다시 보낸다.
   ① 현재 해당 시나리오 상태가 `warning` ② 그 alert가 현재 episode의 마지막 alert ③ `valid_until_utc`가 아직 지나지 않음
   나머지는 보내지 않는다.
 - **중복 ACK**: 같은 `alert_id`와 같은 status의 ACK가 다시 오면 무시한다(멱등). 정상 상태 순서는 `queued < sent < received < played`이고 역행하지 않는다. `unknown_delivery`나 `expired`에서 늦은 `received` 또는 `played` ACK가 오면 해당 ACK 상태로 변경하고 허용 로그 키로 `event="late_ack"`, `alert_id`, `status`를 기록한다. `received`에서 늦은 `played`는 `played`로 올린다. `played`에서 다른 ACK는 무시한다.
@@ -642,10 +642,10 @@ OutputCap = Literal["hud", "speaker", "haptic"]
 - 서버는 `heartbeat_ms`(기본 1000)마다 `heartbeat`를 보낸다.
 - 장치가 `watchdog_ms`(기본 3000) 동안 **아무 서버 메시지도 받지 못하면**, 장치에 내장된 고정 문구 "서버 연결이 끊겨 경고를 받을 수 없습니다."를 선언된 모든 출력으로 1회 내보낸다. 그 뒤 재접속을 시도한다(1/2/4/8초, 최대 8초 간격).
 - 서버가 판단할 수 없는 상황(네트워크 단절, 서버 다운)은 **장치만 알 수 있으므로** 이 고지는 장치의 책임이다. 문구는 장치 앱에 내장하고 서버에서 받지 않는다.
-- 재접속에 성공하면 `resume`을 보내고, 첫 heartbeat를 받으면 "연결 복구" 상태를 표시한다(음성 없음).
+- 재접속에 성공하면 `alert_sync`를 보내고, 첫 heartbeat를 받으면 "연결 복구" 상태를 표시한다(음성 없음).
 
 ### 7.5 Backpressure / Health
-- 세션 입력 큐는 `asyncio.Queue(maxsize=VOA_INPUT_QUEUE_MAX)`다. 큐에는 `observation` 중 detection/track과 후속 단계의 `frame`만 넣는다. `auth`, `resume`, `ack`, health 관측은 제어 경로에서 즉시 처리하고 큐 포화로 버리지 않는다.
+- 세션 입력 큐는 `asyncio.Queue(maxsize=VOA_INPUT_QUEUE_MAX)`다. 큐에는 `observation` 중 detection/track과 후속 단계의 `frame`만 넣는다. `auth`, `alert_sync`, `ack`, health 관측은 제어 경로에서 즉시 처리하고 큐 포화로 버리지 않는다.
 - 큐가 가득 차면 같은 큐의 가장 오래된 영상 항목을 버리고 `dropped_frames += 1`과 해당 `stream_id`의 `drop_pending=true`를 기록한다. 버릴 영상 항목이 없으면 새로 들어온 영상 항목을 거부하고 동일하게 계수한다. 다음에 수락된 같은 stream의 detection/track 관측에만 `frame_dropped` flag를 붙이고 `drop_pending`을 지운다. health와 다른 stream에는 이 flag를 붙이지 않는다.
 - `GET /v1/healthz`: 프로세스가 살아 있으면 200을 반환한다.
 - `GET /v1/readyz`: profile 유효 ∧ 모델 manifest 대조 통과(§4.9, `VOA_MODELS_DIR`) ∧ DB 연결 ∧ 장치 설정 로드 성공이면 200, 아니면 503이다. 503 응답 body에는 실패 항목 이름만 담고 경로나 원문 값은 담지 않는다.

@@ -16,7 +16,7 @@ Android 클라이언트는 위험을 판단하지 않는다. 입력 수집과 �
 
 - Kotlin Android 앱 스캐폴드
 - 장치 등록 정보를 사용한 세션 생성
-- WebSocket 인증, heartbeat, watchdog, 재연결, resume
+- WebSocket 인증, heartbeat, watchdog, 재연결, `alert_sync`
 - `alert`, `notice`, `decision`, `admission`, `heartbeat`, `error` 메시지 파싱
 - HUD, TTS, haptic 출력 어댑터
 - `received` 및 `played` ACK 분리
@@ -43,13 +43,13 @@ Android 클라이언트는 위험을 판단하지 않는다. 입력 수집과 �
 
 Android 구현은 아래 항목이 서버 계약에 반영된 뒤 시작한다.
 
-### GATE-A: 서버 인증과 resume 계약
+### GATE-A: 서버 인증과 재접속 계약
 
 - 계약 상태: `02-technical-specification.md` §7.1에 확정
 - `secret_scrypt`는 16바이트 salt와 32바이트 digest를 분리 저장
 - access token은 메모리에만 유지하고 refresh token은 Android Keystore key로 보호한 앱 전용 저장소에 보관
 - access token 만료 또는 프로세스 재시작 후는 REST refresh endpoint(`/v1/sessions/{id}/refresh`)로 token을 회전한 뒤 WebSocket `auth`를 수행
-- 서버 재시작으로 resume가 401이면 장치 credential로 새 세션 생성
+- 서버 재시작으로 refresh가 401이면 장치 credential로 새 세션 생성
 - 재생 완료 `alert_id` 보존 범위는 현재 세션과 refresh token 만료 시각까지로 제한
 
 ### GATE-B: 메시지 JSON Schema
@@ -73,7 +73,7 @@ Android 구현은 아래 항목이 서버 계약에 반영된 뒤 시작한다.
 apps/android/
   app/                    Activity, foreground service, DI composition
   protocol/               API request, WS message, JSON fixture
-  session/                session, auth, heartbeat, watchdog, resume
+  session/                session, auth, heartbeat, watchdog, alert_sync
   output/                 HUD, TTS, haptic, ACK aggregation
   input-mock/             synthetic ObservationDraft source
   input-media/            Stage C/D camera, IMU, microphone, PTT adapters
@@ -122,7 +122,7 @@ STOPPED
 ### 6.2 `StreamClient`
 
 - WebSocket 연결 및 첫 `auth` 메시지 강제
-- 재연결은 REST token 회전, WebSocket `auth`, `resume(last_alert_seq)` 순서로 수행
+- 재연결은 REST token 회전, WebSocket `auth`, `alert_sync(last_alert_seq)` 순서로 수행 (ADR-0006)
 - 수신 메시지를 타입별 handler로 라우팅
 - 원문 입력을 에러 로그로 반환하지 않음
 - 연결 종료 시 원인을 제한된 error code로만 기록
@@ -172,7 +172,7 @@ STOPPED
 
 - 권한 거부: 해당 capability를 세션 요청에서 제외하거나 health down 전송
 - 권한 회수: 입력 즉시 중단, health down, UI degraded 표시
-- 앱 프로세스 종료: 서버가 기존 세션을 신뢰하지 않도록 resume 계약에 따라 복구
+- 앱 프로세스 종료: 서버가 기존 세션을 신뢰하지 않도록 재접속 계약(ADR-0002, ADR-0005, ADR-0006)에 따라 복구
 - 부팅 자동 시작: 사용자 의도와 Android 제한을 모두 확정하기 전에는 구현하지 않음
 
 ## 9. 작업 패키지
@@ -198,11 +198,11 @@ STOPPED
 - 수용: 정상 세션 생성, 401, 허용 외 capability, 빈 outputs 케이스 통과
 - 보안: secret과 token이 test log, Logcat, exception message에 나오지 않음
 
-### AND-03: WebSocket, heartbeat, watchdog, resume
+### AND-03: WebSocket, heartbeat, watchdog, alert_sync
 
 - 선행: TASK-18, TASK-20, AND-02
 - 산출물: `StreamClient`, `Watchdog`, `ReconnectPolicy`
-- 수용: auth timeout, 정상 heartbeat, 1/2/4/8초 backoff, watchdog 고지 1회, resume 후 ACTIVE 복귀
+- 수용: auth timeout, 정상 heartbeat, 1/2/4/8초 backoff, watchdog 고지 1회, alert_sync 후 ACTIVE 복귀
 - 지연: fake clock으로 `watchdog_ms - 1`, `watchdog_ms`, `watchdog_ms + 1` 경계 검증
 
 ### AND-04: 출력, ACK, 중복 방지
@@ -263,7 +263,7 @@ STOPPED
 - Android 앱은 판단 로직 없이 서버 계약만 구현한다.
 - 외부 네트워크, 실모델, 실제 미디어 없이 AND-06 E2E가 통과한다.
 - 중복 alert 재생은 0건이고 received와 played가 구분된다.
-- watchdog 고지는 단절 episode당 1회이고 재연결 후 resume한다.
+- watchdog 고지는 단절 episode당 1회이고 재연결 후 alert_sync를 보낸다.
 - 카메라 권한 회수와 장치 오류가 unknown 경로로 연결된다.
 - token, secret, raw media, OCR/STT 전문이 로그와 저장소에 없다.
 - 추가 의존성은 허용적 라이선스이고 `02-technical-specification.md` §9에 등록된다.
