@@ -26,6 +26,7 @@ MOVING = "moving_object_in_attention_zone"
 OBSTACLE = "visible_obstacle_in_corridor"
 OBSTACLE_TEXT = "전방 통로에 장애물이 보입니다."
 MODEL = ModelRef(id="mock-detector", revision="0")
+TRACKER = ModelRef(id="mock-tracker", revision="0")
 
 
 @pytest.fixture
@@ -56,7 +57,7 @@ class Feed:
             "seq": self.count,
             "capture_ts_monotonic_ns": now,
             "server_received_mono_ns": now,
-            "model": MODEL,
+            "model": TRACKER if getattr(payload, "kind", "") == "track_state" else MODEL,
             "payload": payload,
         }
         fields.update(overrides)

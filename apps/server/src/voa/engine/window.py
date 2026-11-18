@@ -14,14 +14,15 @@ from voa.contracts.observation import (
     HealthPayload,
     Observation,
     TrackPayload,
+    model_id_of,
 )
-from voa.engine.admission import AdmissionKey
+from voa.engine.admission import AdmissionKey, admission_key
 from voa.engine.profile import PolicyParams, ScenarioProfile
 
 
 @dataclass(frozen=True)
 class ObservationWindow:
-    """Retain accepted observations, with limits applied per stream and kind."""
+    """Retain accepted observations, with limits applied per stream, kind and model."""
 
     params: PolicyParams
     _queues: dict[AdmissionKey, deque[Observation]] = field(
@@ -33,7 +34,7 @@ class ObservationWindow:
     def append(self, observation: Observation, *, now_mono_ns: int) -> tuple[str, ...]:
         """Store an accepted observation and return all time/capacity evictions."""
         evicted = list(self.prune(now_mono_ns=now_mono_ns))
-        key = (observation.stream_id, observation.source_kind)
+        key = admission_key(observation)
         queue = self._queues.setdefault(key, deque())
         queue.append(observation)
         self._index[observation.observation_id] = observation
@@ -104,6 +105,7 @@ class FrameAssembler:
         if (
             observation.stream_id not in self.scenario.required_streams
             or observation.source_kind not in self.scenario.required_kinds
+            or model_id_of(observation) != self.scenario.required_models[observation.source_kind]
             or not isinstance(payload, DetectionPayload | TrackPayload)
             or self.window.get_observation(observation.observation_id) is not observation
         ):
