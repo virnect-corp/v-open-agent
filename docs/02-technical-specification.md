@@ -639,7 +639,7 @@ OutputCap = Literal["hud", "speaker", "haptic"]
 - 세션 입력 큐는 `asyncio.Queue(maxsize=VOA_INPUT_QUEUE_MAX)`다. 큐에는 `observation` 중 detection/track과 후속 단계의 `frame`만 넣는다. `auth`, `resume`, `ack`, health 관측은 제어 경로에서 즉시 처리하고 큐 포화로 버리지 않는다.
 - 큐가 가득 차면 같은 큐의 가장 오래된 영상 항목을 버리고 `dropped_frames += 1`과 해당 `stream_id`의 `drop_pending=true`를 기록한다. 버릴 영상 항목이 없으면 새로 들어온 영상 항목을 거부하고 동일하게 계수한다. 다음에 수락된 같은 stream의 detection/track 관측에만 `frame_dropped` flag를 붙이고 `drop_pending`을 지운다. health와 다른 stream에는 이 flag를 붙이지 않는다.
 - `GET /v1/healthz`: 프로세스가 살아 있으면 200을 반환한다.
-- `GET /v1/readyz`: profile 유효 ∧ DB 연결 ∧ 장치 설정 로드 성공이면 200, 아니면 503이다.
+- `GET /v1/readyz`: profile 유효 ∧ 모델 manifest 대조 통과(§4.9, `VOA_MODELS_DIR`) ∧ DB 연결 ∧ 장치 설정 로드 성공이면 200, 아니면 503이다. 503 응답 body에는 실패 항목 이름만 담고 경로나 원문 값은 담지 않는다.
 - `GET /v1/sessions/{id}/status`: 시나리오별 상태, stream별 마지막 수신 후 경과 ms, `dropped_frames`, 미확인 alert 목록.
 
 ```json
@@ -697,6 +697,8 @@ VOA_ALLOW_INSECURE_DEV=true          # pilot 에서는 false 강제
 VOA_TLS_CERT=                        # pilot 에서 필수 (cert/key 없으면 시작 거부)
 VOA_TLS_KEY=
 VOA_POLICY_PROFILE=config/profiles/indoor_research_v0.yaml
+VOA_MODELS_DIR=config/models            # 모델 manifest 폴더 (ADR-0004)
+VOA_MODEL_WEIGHTS_DIR=var/models        # 가중치 루트. weights=file 모델은 <dir>/<model_id>/ 에서 읽는다
 VOA_DEVICES_FILE=config/devices.yaml
 VOA_DB_PATH=var/voa.sqlite3
 VOA_TICK_INTERVAL_MS=100
@@ -715,7 +717,19 @@ VOA_MODEL_AUTO_DOWNLOAD=false
 
 숫자 설정은 `TICK_INTERVAL_MS > 0`, `HEARTBEAT_MS > 0`, `CLIENT_WATCHDOG_MS >= 2 × HEARTBEAT_MS`, `TOKEN_TTL_S > 0`, `RESUME_TOKEN_TTL_S >= TOKEN_TTL_S`, `INPUT_QUEUE_MAX >= 1`, `METADATA_RETENTION_DAYS >= 1`을 만족해야 한다. 위반하면 서버는 시작하지 않는다.
 
+어떤 모델을 쓸지는 `VOA_POLICY_PROFILE`(시나리오의 `required_models`)과 `VOA_MODELS_DIR`(manifest)이 정한다. `weights: file` 모델의 가중치는 `VOA_MODEL_WEIGHTS_DIR/<model_id>/` 아래에 사용자가 미리 받아 둔 파일만 읽고, 로드 전에 manifest의 `sha256`과 대조한다. 서버는 가중치를 다운로드하지 않는다(`VOA_MODEL_AUTO_DOWNLOAD=false`). manifest 대조가 실패하면 서버는 시작하되 `readyz` 503을 반환하고 엔진은 `ProfileError`로 만든다(INV-10).
+
 `python -m voa.server`는 운영 진입점이다. `VOA_BIND`, `VOA_PORT`로 uvicorn을 시작하고 `VOA_PROFILE=pilot`이면 검증된 `VOA_TLS_CERT`, `VOA_TLS_KEY`를 uvicorn SSL 인자로 넘긴다. `server.app:app`을 import하는 것만으로 서버를 시작하지 않는다.
+
+### 8.4 Docker 실행 규약
+
+- **의존성은 이미지에만 설치한다.** `docker/server.Dockerfile`이 `/opt/venv`에 `apps/server/pyproject.toml`의 의존성을 설치한다. 호스트에는 Python 패키지를 설치하지 않는다. 의존성이 바뀌면 `scripts/build.sh`로 이미지를 다시 빌드한다.
+- **소스는 공유 폴더(bind mount)로 쓴다.** `compose.yaml`의 `dev`(검사)와 `server`(실행) 서비스 모두 저장소 루트를 `/workspace`로 마운트하고, `PYTHONPATH=/workspace/apps/server/src`, 작업 디렉터리 `/workspace/apps/server`에서 실행한다. 따라서 §8.3의 상대 경로가 그대로 맞고, 소스 수정은 이미지 재빌드 없이 반영된다.
+- **모델은 Docker 파라미터로 지정한다.** 가중치는 이미지에 넣지 않는다. 호스트 폴더 `${VOA_MODEL_WEIGHTS_HOST:-./var/models}`를 컨테이너 `/models`에 읽기 전용으로 마운트하고 `VOA_MODEL_WEIGHTS_DIR=/models`로 설정한다. 사용할 profile과 manifest 폴더는 `VOA_POLICY_PROFILE`, `VOA_MODELS_DIR` 환경변수로 바꾼다. 예: `VOA_POLICY_PROFILE=config/profiles/<profile>.yaml docker compose --profile server up server`.
+- **실모델 의존성과 GPU는 Stage C에서 선택 설치한다.** torch, transformers 등은 `pyproject.toml`의 별도 optional-dependencies 그룹으로 두고 build arg로 설치 여부를 고른다. GPU 사용은 compose override 파일로 분리한다. 기본 이미지와 기본 테스트는 GPU와 가중치 없이 동작한다.
+- **데이터는 도커 볼륨에 둔다.** SQLite DB(`VOA_DB_PATH=/data/voa.sqlite3`)는 공유 폴더가 아닌 `voa-data` 볼륨에 둔다.
+- `dev` 서비스는 `network_mode: none`이다. `server` 서비스는 기본으로 호스트 loopback(`127.0.0.1:8765`)에만 포트를 연다.
+- `docker/server.Dockerfile`의 `server` target(소스를 이미지에 복사)은 pilot 배포 패키징용으로 남겨 둔다. 개발 중 실행은 위 bind mount 방식을 쓴다.
 
 ---
 
