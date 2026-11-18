@@ -553,6 +553,8 @@ devices:
 - `VOA_ALLOW_INSECURE_DEV=true`는 bind 주소가 `127.0.0.1`일 때만 허용한다. 이때 장치 `dev_fixture`는 secret 없이 세션을 만들 수 있다.
 - `POST /v1/sessions`와 resume endpoint를 제외한 세션 범위 REST API는 `Authorization: Bearer <access token>`을 요구한다. token은 URL, query, 로그에 넣지 않는다. 해당 token의 session과 path의 session이 다르면 404 `not_found`로 응답한다.
 - REST 오류 본문은 `{"code": "<stable_code>"}`다. 인증 실패는 원인과 관계없이 401 `{"code":"unauthorized"}`, capability 범위 위반은 400 `capability_not_allowed`, 빈 outputs는 400 `no_output_capability`다. 요청 원문과 secret은 응답에 넣지 않는다.
+- 요청 본문이 스키마에 맞지 않으면 400 `invalid_request`다(프레임워크 기본 422는 입력을 되돌려주므로 쓰지 않는다). 서버가 준비되지 않았으면(`readyz` 실패) 세션 발급은 503 `not_ready`다.
+- 미등록 장치도 같은 비용의 scrypt 계산을 거쳐 401을 반환한다(응답 시간으로 등록 여부를 구분할 수 없게 한다). insecure dev의 `dev_fixture`는 모든 capability를 허용한다.
 
 ### 7.2 WS `/v1/streams/{session_id}` 메시지 (`voa.contracts.messages`)
 
@@ -575,6 +577,8 @@ devices:
 
 - `resume.last_alert_seq`는 0 이상이다. 아직 alert를 받지 않은 클라이언트는 0을 보낸다.
 - 알 수 없는 type은 `error(code="unsupported_message_type")`, 알려진 type의 schema 오류는 `error(code="rejected_schema")`를 보내고 무시한다.
+- 세션에서 선언하지 않은 `stream_id`의 `observation`(health 포함)은 `error(code="stream_not_declared")`를 보내고 무시한다. 그렇지 않으면 미선언 센서에 health `ok`를 보내 주입된 `not_declared` down 상태를 풀 수 있다(DEV-01, T-R17).
+- `error.message`는 code마다 고정된 문구이고 클라이언트 입력을 담지 않는다.
 - auth 전 다른 메시지, 두 번째 auth, auth 전 resume는 protocol 위반이며 `error(code="protocol_error")` 후 close 4401이다.
 - JSON 텍스트가 아닌 WebSocket frame은 MVP에서 `unsupported_message_type`으로 무시한다.
 
@@ -772,3 +776,4 @@ VOA_MODEL_AUTO_DOWNLOAD=false
 | FastAPI | MIT | yes | no |
 | uvicorn | BSD-3-Clause | yes | no |
 | httpx | BSD-3-Clause | yes | no |
+| websockets | BSD-3-Clause | yes | no |
