@@ -647,6 +647,8 @@ OutputCap = Literal["hud", "speaker", "haptic"]
 ### 7.5 Backpressure / Health
 - 세션 입력 큐는 `asyncio.Queue(maxsize=VOA_INPUT_QUEUE_MAX)`다. 큐에는 `observation` 중 detection/track과 후속 단계의 `frame`만 넣는다. `auth`, `alert_sync`, `ack`, health 관측은 제어 경로에서 즉시 처리하고 큐 포화로 버리지 않는다.
 - 큐가 가득 차면 같은 큐의 가장 오래된 영상 항목을 버리고 `dropped_frames += 1`과 해당 `stream_id`의 `drop_pending=true`를 기록한다. 버릴 영상 항목이 없으면 새로 들어온 영상 항목을 거부하고 동일하게 계수한다. 다음에 수락된 같은 stream의 detection/track 관측에만 `frame_dropped` flag를 붙이고 `drop_pending`을 지운다. health와 다른 stream에는 이 flag를 붙이지 않는다.
+- 큐에 넣는 시각이 관측의 `server_received_mono_ns`다. 큐에서 기다린 시간도 관측 나이에 포함되므로, 너무 늦게 처리된 관측은 Admission에서 `stale_on_arrival`이 된다. `frame_dropped` flag는 큐에 들어갈 때 붙인다.
+- `status.streams`는 세션에서 선언한 입력 stream 목록이고, `last_received_age_ms`는 그 stream의 마지막 WebSocket 수신(영상과 health 모두) 기준이다.
 - `GET /v1/healthz`: 프로세스가 살아 있으면 200을 반환한다.
 - `GET /v1/readyz`: profile 유효 ∧ 모델 manifest 대조 통과(§4.9, `VOA_MODELS_DIR`) ∧ DB 연결 ∧ 장치 설정 로드 성공이면 200, 아니면 503이다. 503 응답 body에는 실패 항목 이름만 담고 경로나 원문 값은 담지 않는다.
 - `GET /v1/sessions/{id}/status`: 시나리오별 상태, stream별 마지막 수신 후 경과 ms, `dropped_frames`, 미확인 alert 목록.

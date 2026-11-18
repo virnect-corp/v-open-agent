@@ -37,7 +37,7 @@ from voa.server.devices import DeviceConfig, load_devices
 from voa.server.runtime import AnchoredUtcClock, SecureIdFactory
 from voa.server.session import SessionStream
 from voa.server.settings import Settings
-from voa.server.ws import register_stream_routes, tick_loop
+from voa.server.ws import input_loop, register_stream_routes, tick_loop
 from voa.storage.sqlite import SQLiteStore
 
 NotReadyCode = Literal["profile_invalid", "db_unavailable", "devices_invalid"]
@@ -75,6 +75,7 @@ class ServerRuntime:
     streams: dict[str, SessionStream] = field(default_factory=dict)
     connections: dict[str, WebSocket] = field(default_factory=dict)
     tick_tasks: dict[str, "asyncio.Task[None]"] = field(default_factory=dict)
+    input_tasks: dict[str, "asyncio.Task[None]"] = field(default_factory=dict)
     background: list["asyncio.Task[None]"] = field(default_factory=list)
 
     @classmethod
@@ -121,9 +122,10 @@ class ServerRuntime:
 
     def end_session(self, session_id: str, now_mono_ns: int) -> None:
         """Stop the tick loop, forget engine and token digests, record ended_at_utc."""
-        task = self.tick_tasks.pop(session_id, None)
-        if task is not None:
-            task.cancel()
+        for tasks in (self.tick_tasks, self.input_tasks):
+            task = tasks.pop(session_id, None)
+            if task is not None:
+                task.cancel()
         stream = self.streams.pop(session_id, None)
         self.sessions.remove(session_id)
         if stream is not None and self.store is not None:
@@ -156,10 +158,18 @@ class ServerRuntime:
             )
 
     def close(self) -> None:
-        for task in [*self.tick_tasks.values(), *self.background]:
+        for task in [*self.tick_tasks.values(), *self.input_tasks.values(), *self.background]:
             task.cancel()
         if self.store is not None:
             self.store.close()
+
+
+def _bearer_session(runtime: "ServerRuntime", request: Request, now_mono_ns: int) -> str | None:
+    """`Authorization: Bearer <access token>` -> session ID (SPEC 7.1)."""
+    scheme, _, token = request.headers.get("authorization", "").partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return None
+    return runtime.sessions.session_for_access(token, now_mono_ns)
 
 
 async def _every(interval_s: float, action: Callable[[], object]) -> None:
@@ -262,9 +272,11 @@ def create_app(
             clock=runtime.clock,
             store=runtime.store,
             now_mono_ns=now,
+            input_queue_max=runtime.settings.input_queue_max,
         )
         runtime.streams[session.session_id] = stream
         runtime.tick_tasks[session.session_id] = asyncio.create_task(tick_loop(runtime, stream))
+        runtime.input_tasks[session.session_id] = asyncio.create_task(input_loop(runtime, stream))
         created = SessionCreated.model_validate(
             {
                 "session_id": session.session_id,
@@ -286,15 +298,23 @@ def create_app(
         pair = TokenPair.model_validate(_token_pair(runtime, tokens))
         return JSONResponse(pair.model_dump(mode="json"))
 
+    @app.get("/v1/sessions/{session_id}/status")
+    async def session_status(request: Request, session_id: str) -> JSONResponse:
+        runtime: ServerRuntime = request.app.state.runtime
+        now = runtime.mono_ns()
+        owner = _bearer_session(runtime, request, now)
+        if owner is None:
+            return _error(401, "unauthorized")
+        stream = runtime.streams.get(session_id)
+        if owner != session_id or stream is None:
+            return _error(404, "not_found")  # another device's session looks missing
+        return JSONResponse(stream.status(now))
+
     @app.post("/v1/alerts/{alert_id}/ack")
     async def ack_alert(request: Request, alert_id: str, body: AckRequest) -> JSONResponse:
         runtime: ServerRuntime = request.app.state.runtime
-        header = request.headers.get("authorization", "")
-        scheme, _, token = header.partition(" ")
         now = runtime.mono_ns()
-        session_id = (
-            runtime.sessions.session_for_access(token, now) if scheme.lower() == "bearer" else None
-        )
+        session_id = _bearer_session(runtime, request, now)
         if session_id is None:
             return _error(401, "unauthorized")
         stream = runtime.streams.get(session_id)

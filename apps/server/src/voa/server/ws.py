@@ -30,6 +30,7 @@ from voa.contracts.messages import (
     ObservationMessage,
     error_message,
 )
+from voa.contracts.observation import VISION_KINDS
 from voa.server.session import SessionStream
 
 if TYPE_CHECKING:
@@ -82,6 +83,20 @@ async def tick_loop(runtime: "ServerRuntime", stream: SessionStream) -> None:
         websocket = runtime.connections.get(stream.session_id)
         if websocket is None:
             continue  # alerts stay queued; alert_sync re-sends them if still valid
+        with contextlib.suppress(WebSocketDisconnect, RuntimeError):
+            await _push(runtime, stream, websocket, messages)
+
+
+async def input_loop(runtime: "ServerRuntime", stream: SessionStream) -> None:
+    """Consumes the bounded video queue; engine time is read right before each step."""
+    while True:
+        item = await stream.input.get()
+        messages = stream.ingest(
+            item.draft, runtime.mono_ns(), received_mono_ns=item.received_mono_ns
+        )
+        websocket = runtime.connections.get(stream.session_id)
+        if websocket is None:
+            continue
         with contextlib.suppress(WebSocketDisconnect, RuntimeError):
             await _push(runtime, stream, websocket, messages)
 
@@ -174,4 +189,9 @@ async def _serve(runtime: "ServerRuntime", stream: SessionStream, websocket: Web
             if not stream.accepts_stream(draft.stream_id):
                 await _send(websocket, error_message("stream_not_declared"))
                 continue
-            await _push(runtime, stream, websocket, stream.ingest(draft, runtime.mono_ns()))
+            now = runtime.mono_ns()
+            stream.record_receipt(draft.stream_id, now)
+            if draft.payload.kind in VISION_KINDS:
+                stream.input.offer(draft, received_mono_ns=now)  # overload policy: SPEC 7.5
+            else:
+                await _push(runtime, stream, websocket, stream.ingest(draft, now))  # control path
