@@ -32,6 +32,27 @@
       "title": "AckMessage",
       "type": "object"
     },
+    "AlertSyncMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "last_alert_seq": {
+          "minimum": 0,
+          "title": "Last Alert Seq",
+          "type": "integer"
+        },
+        "type": {
+          "const": "alert_sync",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "last_alert_seq"
+      ],
+      "title": "AlertSyncMessage",
+      "type": "object"
+    },
     "AsrPayload": {
       "additionalProperties": false,
       "properties": {
@@ -435,27 +456,6 @@
       "title": "OcrPayload",
       "type": "object"
     },
-    "ResumeMessage": {
-      "additionalProperties": false,
-      "properties": {
-        "last_alert_seq": {
-          "minimum": 0,
-          "title": "Last Alert Seq",
-          "type": "integer"
-        },
-        "type": {
-          "const": "resume",
-          "title": "Type",
-          "type": "string"
-        }
-      },
-      "required": [
-        "type",
-        "last_alert_seq"
-      ],
-      "title": "ResumeMessage",
-      "type": "object"
-    },
     "SoundEventPayload": {
       "additionalProperties": false,
       "properties": {
@@ -622,9 +622,9 @@
   "discriminator": {
     "mapping": {
       "ack": "#/$defs/AckMessage",
+      "alert_sync": "#/$defs/AlertSyncMessage",
       "auth": "#/$defs/AuthMessage",
-      "observation": "#/$defs/ObservationMessage",
-      "resume": "#/$defs/ResumeMessage"
+      "observation": "#/$defs/ObservationMessage"
     },
     "propertyName": "type"
   },
@@ -633,7 +633,7 @@
       "$ref": "#/$defs/AuthMessage"
     },
     {
-      "$ref": "#/$defs/ResumeMessage"
+      "$ref": "#/$defs/AlertSyncMessage"
     },
     {
       "$ref": "#/$defs/ObservationMessage"

@@ -165,7 +165,7 @@ def test_no_auth_within_timeout_closes_4401(
 @pytest.mark.parametrize(
     "first",
     [
-        {"type": "resume", "last_alert_seq": 0},
+        {"type": "alert_sync", "last_alert_seq": 0},
         {"type": "ack", "alert_id": "a1", "status": "received"},
     ],
 )
@@ -304,14 +304,14 @@ def test_undeclared_streams_get_health_down_once(harness: Harness) -> None:
     assert observation.payload.detail_code == "not_declared"
 
 
-# --- Resume and message type handling ---
+# --- alert_sync and message type handling ---
 
 
-def test_resume_after_auth_is_accepted(harness: Harness) -> None:
+def test_alert_sync_after_auth_is_accepted(harness: Harness) -> None:
     session = harness.session()
     ws = authed(harness, session)
-    ws.send_json({"type": "resume", "last_alert_seq": 0})
-    ws.send_json({"type": "resume", "last_alert_seq": -1})
+    ws.send_json({"type": "alert_sync", "last_alert_seq": 0})
+    ws.send_json({"type": "alert_sync", "last_alert_seq": -1})
     assert receive(ws)["code"] == "rejected_schema"  # only the invalid one answers
     ws.close()
     runtime = harness.client.app.state.runtime  # type: ignore[attr-defined]

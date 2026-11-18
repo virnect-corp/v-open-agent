@@ -35,9 +35,9 @@ class AuthMessage(BaseModel):
     token: str = Field(max_length=256)
 
 
-class ResumeMessage(BaseModel):
+class AlertSyncMessage(BaseModel):
     model_config = MODEL_CONFIG
-    type: Literal["resume"]
+    type: Literal["alert_sync"]
     last_alert_seq: int = Field(ge=0)
 
 
@@ -55,9 +55,9 @@ class AckMessage(BaseModel):
 
 
 ClientMessage = Annotated[
-    AuthMessage | ResumeMessage | ObservationMessage | AckMessage, Field(discriminator="type")
+    AuthMessage | AlertSyncMessage | ObservationMessage | AckMessage, Field(discriminator="type")
 ]
-CLIENT_TYPES = frozenset({"auth", "resume", "observation", "ack"})
+CLIENT_TYPES = frozenset({"auth", "alert_sync", "observation", "ack"})
 
 
 class ClientEnvelope(RootModel[ClientMessage]):

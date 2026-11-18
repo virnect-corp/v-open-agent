@@ -20,6 +20,7 @@ from voa.contracts.messages import (
     CLIENT_TYPES,
     AckMessage,
     AlertMessage,
+    AlertSyncMessage,
     AuthMessage,
     AuthOkMessage,
     ClientEnvelope,
@@ -27,7 +28,6 @@ from voa.contracts.messages import (
     ErrorCode,
     HeartbeatMessage,
     ObservationMessage,
-    ResumeMessage,
     error_message,
 )
 from voa.server.session import SessionStream
@@ -81,7 +81,7 @@ async def tick_loop(runtime: "ServerRuntime", stream: SessionStream) -> None:
         messages = stream.tick(runtime.mono_ns())
         websocket = runtime.connections.get(stream.session_id)
         if websocket is None:
-            continue  # delivery while disconnected is handled on resume (TASK-20)
+            continue  # alerts stay queued; alert_sync re-sends them if still valid
         with contextlib.suppress(WebSocketDisconnect, RuntimeError):
             await _push(runtime, stream, websocket, messages)
 
@@ -163,8 +163,9 @@ async def _serve(runtime: "ServerRuntime", stream: SessionStream, websocket: Web
         elif isinstance(message, AuthMessage):
             await _send(websocket, error_message("protocol_error"))
             return  # second auth: close 4401 in the caller
-        elif isinstance(message, ResumeMessage):
-            stream.last_alert_seq = message.last_alert_seq
+        elif isinstance(message, AlertSyncMessage):
+            resend = stream.alert_sync(message.last_alert_seq, runtime.mono_ns())
+            await _push(runtime, stream, websocket, resend)
         elif isinstance(message, AckMessage):
             # Unknown alert IDs are ignored; ACKs are idempotent (SPEC 7.3).
             stream.ack(message.alert_id, message.status, runtime.mono_ns())

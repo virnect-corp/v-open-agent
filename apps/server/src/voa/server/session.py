@@ -40,7 +40,7 @@ class SessionStream:
     notices: NoticeTracker = field(default_factory=NoticeTracker)
     injected_ids: tuple[str, ...] = ()
     alert_seq: int = 0
-    last_alert_seq: int | None = None  # from `resume`; retransmission is TASK-20
+    last_alert_seq: int | None = None  # last value reported by `alert_sync`
     connected: bool = field(default=False)
 
     @classmethod
@@ -114,6 +114,34 @@ class SessionStream:
         for record in self.dispatcher.expire(now_mono_ns):
             self._persist_alert(record, now_mono_ns)
         return messages
+
+    def alert_sync(self, last_alert_seq: int, now_mono_ns: int) -> list[AlertMessage]:
+        """SPEC 7.3: re-send, with the same alert_id and alert_seq, only alerts after
+        `last_alert_seq` whose scenario is still `warning`, that are the latest alert of
+        that scenario (the current episode's last alert), and are still valid.
+        """
+        self.last_alert_seq = last_alert_seq
+        states = self.engine.states()
+        latest: dict[str, int] = {}
+        for record in self.dispatcher.records.values():
+            latest[record.scenario_id] = max(latest.get(record.scenario_id, 0), record.alert_seq)
+        resend = [
+            record
+            for record in self.dispatcher.records.values()
+            if record.alert_seq > last_alert_seq
+            and states.get(record.scenario_id) == "warning"
+            and record.alert_seq == latest[record.scenario_id]
+            and now_mono_ns < record.valid_until_mono_ns
+        ]
+        return [
+            AlertMessage(
+                alert_seq=record.alert_seq,
+                alert=record.alert,
+                risk_event_id=record.risk_event_id,
+                scenario_id=record.scenario_id,
+            )
+            for record in sorted(resend, key=lambda r: r.alert_seq)
+        ]
 
     def mark_sent(self, alert_id: str, now_mono_ns: int) -> None:
         """Called after the alert message was actually written to the socket."""
