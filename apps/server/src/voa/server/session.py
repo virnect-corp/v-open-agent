@@ -18,8 +18,14 @@ from voa.contracts.observation import HealthPayload, Observation, ObservationDra
 from voa.engine.engine import DecisionEngine
 from voa.engine.ports import IdFactory, UtcClock
 from voa.engine.profile import PolicyProfile
+from voa.server.backpressure import InputQueue
 from voa.server.dispatch import AckOutcome, AckStatus, AlertDispatcher, AlertRecord, NoticeTracker
 from voa.storage.sqlite import SQLiteStore
+
+
+def _utc_text(value: datetime | None) -> str | None:
+    return None if value is None else value.isoformat().replace("+00:00", "Z")
+
 
 PushMessage = DecisionMessage | AlertMessage | AdmissionMessage | NoticeMessage
 
@@ -36,6 +42,8 @@ class SessionStream:
     started_at_utc: datetime
     warning_ttl_ms: int
     degraded_notice_text: str
+    input: InputQueue
+    last_received_mono_ns: dict[str, int] = field(default_factory=dict)
     dispatcher: AlertDispatcher = field(default_factory=AlertDispatcher)
     notices: NoticeTracker = field(default_factory=NoticeTracker)
     injected_ids: tuple[str, ...] = ()
@@ -55,6 +63,7 @@ class SessionStream:
         clock: UtcClock,
         store: SQLiteStore | None,
         now_mono_ns: int,
+        input_queue_max: int = 64,
     ) -> "SessionStream":
         stream = cls(
             session_id=session_id,
@@ -67,6 +76,7 @@ class SessionStream:
             started_at_utc=clock.at(now_mono_ns),
             warning_ttl_ms=profile.params.warning_ttl_ms,
             degraded_notice_text=profile.degraded_notice_text,
+            input=InputQueue(input_queue_max),
         )
         stream._inject_undeclared(profile, now_mono_ns)
         return stream
@@ -92,8 +102,19 @@ class SessionStream:
     def accepts_stream(self, stream_id: str) -> bool:
         return stream_id in self.inputs
 
-    def ingest(self, draft: ObservationDraft, now_mono_ns: int) -> list[PushMessage]:
-        observation = self._observation(draft, now_mono_ns)
+    def record_receipt(self, stream_id: str, now_mono_ns: int) -> None:
+        self.last_received_mono_ns[stream_id] = now_mono_ns
+
+    def ingest(
+        self,
+        draft: ObservationDraft,
+        now_mono_ns: int,
+        *,
+        received_mono_ns: int | None = None,
+    ) -> list[PushMessage]:
+        """`received_mono_ns` is the queue entry time, so queueing delay counts as age."""
+        received = now_mono_ns if received_mono_ns is None else received_mono_ns
+        observation = self._observation(draft, received)
         result = self.engine.step(observation, now_mono_ns)
         if self.store is not None:
             self.store.save_observation(observation, admission_status=result.admission)
@@ -142,6 +163,42 @@ class SessionStream:
             )
             for record in sorted(resend, key=lambda r: r.alert_seq)
         ]
+
+    def status(self, now_mono_ns: int) -> dict[str, object]:
+        """SPEC 7.5 status body. No alert text or tokens."""
+        pending = sorted(
+            (r for r in self.dispatcher.records.values() if r.state not in ("played", "expired")),
+            key=lambda r: r.alert_seq,
+        )
+        return {
+            "session_id": self.session_id,
+            "device_id": self.device_id,
+            "scenarios": [
+                {"scenario_id": scenario_id, "state": state}
+                for scenario_id, state in self.engine.states().items()
+            ],
+            "streams": [
+                {
+                    "stream_id": stream_id,
+                    "last_received_age_ms": (
+                        None
+                        if stream_id not in self.last_received_mono_ns
+                        else (now_mono_ns - self.last_received_mono_ns[stream_id]) // 1_000_000
+                    ),
+                    "dropped_frames": self.input.dropped.get(stream_id, 0),
+                }
+                for stream_id in sorted(self.inputs)
+            ],
+            "pending_alerts": [
+                {
+                    "alert_id": record.alert_id,
+                    "alert_seq": record.alert_seq,
+                    "delivery_state": record.state,
+                    "valid_until_utc": _utc_text(record.alert.valid_until_utc),
+                }
+                for record in pending
+            ],
+        }
 
     def mark_sent(self, alert_id: str, now_mono_ns: int) -> None:
         """Called after the alert message was actually written to the socket."""
