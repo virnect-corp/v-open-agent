@@ -28,7 +28,7 @@ def test_defaults_match_spec() -> None:
     assert s.devices_file == BASE / "config/devices.yaml"
     assert s.db_path == BASE / "var/voa.sqlite3"
     assert (s.tick_interval_ms, s.heartbeat_ms, s.client_watchdog_ms) == (100, 1000, 3000)
-    assert (s.token_ttl_s, s.resume_token_ttl_s) == (900, 86400)
+    assert (s.token_ttl_s, s.refresh_token_ttl_s) == (900, 86400)
     assert (s.input_queue_max, s.metadata_retention_days) == (64, 7)
     assert (s.raw_media_storage, s.external_network, s.model_auto_download) == (
         False,
@@ -58,7 +58,7 @@ def test_other_environment_variables_are_ignored() -> None:
         ({"HEARTBEAT_MS": "0"}, "VOA_HEARTBEAT_MS"),
         ({"HEARTBEAT_MS": "2000", "CLIENT_WATCHDOG_MS": "3999"}, "VOA_CLIENT_WATCHDOG_MS"),
         ({"TOKEN_TTL_S": "0"}, "VOA_TOKEN_TTL_S"),
-        ({"TOKEN_TTL_S": "100", "RESUME_TOKEN_TTL_S": "99"}, "VOA_RESUME_TOKEN_TTL_S"),
+        ({"TOKEN_TTL_S": "100", "REFRESH_TOKEN_TTL_S": "99"}, "VOA_REFRESH_TOKEN_TTL_S"),
         ({"INPUT_QUEUE_MAX": "0"}, "VOA_INPUT_QUEUE_MAX"),
         ({"METADATA_RETENTION_DAYS": "0"}, "VOA_METADATA_RETENTION_DAYS"),
         ({"PORT": "0"}, "VOA_PORT"),
@@ -73,9 +73,9 @@ def test_numeric_rules(env: dict[str, str], field: str) -> None:
 
 def test_boundary_values_are_accepted() -> None:
     s = load(
-        HEARTBEAT_MS="1500", CLIENT_WATCHDOG_MS="3000", TOKEN_TTL_S="60", RESUME_TOKEN_TTL_S="60"
+        HEARTBEAT_MS="1500", CLIENT_WATCHDOG_MS="3000", TOKEN_TTL_S="60", REFRESH_TOKEN_TTL_S="60"
     )
-    assert (s.client_watchdog_ms, s.resume_token_ttl_s) == (3000, 60)
+    assert (s.client_watchdog_ms, s.refresh_token_ttl_s) == (3000, 60)
 
 
 @pytest.mark.parametrize(

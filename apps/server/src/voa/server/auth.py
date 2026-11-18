@@ -1,4 +1,4 @@
-"""Device credentials, session tokens and resume rotation (SPEC 7.1, ADR-0002).
+"""Device credentials, session tokens and refresh rotation (SPEC 7.1, ADR-0002).
 
 Only SHA-256 digests of tokens are kept, in memory. Plain tokens, secrets and
 digests never reach the DB or logs. A restart forgets every session and token.
@@ -51,17 +51,17 @@ class CreateSessionRequest(BaseModel):
     capabilities: Capabilities
 
 
-class ResumeRequest(BaseModel):
+class RefreshRequest(BaseModel):
     model_config = MODEL_CONFIG
-    resume_token: str = Field(max_length=256)
+    refresh_token: str = Field(max_length=256)
 
 
 class TokenPair(BaseModel):
     model_config = MODEL_CONFIG
     token: str
     token_expires_at_utc: UtcDatetime
-    resume_token: str
-    resume_token_expires_at_utc: UtcDatetime
+    refresh_token: str
+    refresh_token_expires_at_utc: UtcDatetime
 
 
 class SessionCreated(TokenPair):
@@ -100,29 +100,40 @@ class SessionAuth:
     outputs: tuple[str, ...]
     access_digest: bytes
     access_expires_mono_ns: int
-    resume_digest: bytes
-    resume_expires_mono_ns: int
+    refresh_digest: bytes
+    refresh_expires_mono_ns: int
 
 
 @dataclass(frozen=True)
 class IssuedTokens:
     token: str
     token_expires_mono_ns: int
-    resume_token: str
-    resume_expires_mono_ns: int
+    refresh_token: str
+    refresh_expires_mono_ns: int
 
 
 class SessionRegistry:
     """In-memory sessions for one server process (no restore after restart)."""
 
-    def __init__(self, ids: SecureIdFactory, *, token_ttl_s: int, resume_ttl_s: int) -> None:
+    def __init__(self, ids: SecureIdFactory, *, token_ttl_s: int, refresh_ttl_s: int) -> None:
         self._ids = ids
         self._token_ttl_ns = token_ttl_s * NS_PER_S
-        self._resume_ttl_ns = resume_ttl_s * NS_PER_S
+        self._refresh_ttl_ns = refresh_ttl_s * NS_PER_S
         self._sessions: dict[str, SessionAuth] = {}
 
     def get(self, session_id: str) -> SessionAuth | None:
         return self._sessions.get(session_id)
+
+    def remove(self, session_id: str) -> None:
+        self._sessions.pop(session_id, None)
+
+    def refresh_expired(self, now_mono_ns: int) -> list[str]:
+        """Sessions that can no longer be refreshed (ADR-0005)."""
+        return [
+            session.session_id
+            for session in self._sessions.values()
+            if now_mono_ns >= session.refresh_expires_mono_ns
+        ]
 
     def create(
         self, device_id: str, capabilities: Capabilities, now_mono_ns: int
@@ -135,24 +146,24 @@ class SessionRegistry:
             outputs=tuple(capabilities.outputs),
             access_digest=token_digest(tokens.token),
             access_expires_mono_ns=tokens.token_expires_mono_ns,
-            resume_digest=token_digest(tokens.resume_token),
-            resume_expires_mono_ns=tokens.resume_expires_mono_ns,
+            refresh_digest=token_digest(tokens.refresh_token),
+            refresh_expires_mono_ns=tokens.refresh_expires_mono_ns,
         )
         self._sessions[session.session_id] = session
         return session, tokens
 
-    def resume(self, session_id: str, resume_token: str, now_mono_ns: int) -> IssuedTokens | None:
+    def refresh(self, session_id: str, refresh_token: str, now_mono_ns: int) -> IssuedTokens | None:
         """One-time rotation: on success both previous tokens stop working at once."""
         session = self._sessions.get(session_id)
-        if session is None or now_mono_ns >= session.resume_expires_mono_ns:
+        if session is None or now_mono_ns >= session.refresh_expires_mono_ns:
             return None
-        if not hmac.compare_digest(session.resume_digest, token_digest(resume_token)):
+        if not hmac.compare_digest(session.refresh_digest, token_digest(refresh_token)):
             return None
         tokens = self._issue(now_mono_ns)
         session.access_digest = token_digest(tokens.token)
         session.access_expires_mono_ns = tokens.token_expires_mono_ns
-        session.resume_digest = token_digest(tokens.resume_token)
-        session.resume_expires_mono_ns = tokens.resume_expires_mono_ns
+        session.refresh_digest = token_digest(tokens.refresh_token)
+        session.refresh_expires_mono_ns = tokens.refresh_expires_mono_ns
         return tokens
 
     def verify_access(self, session_id: str, token: str, now_mono_ns: int) -> bool:
@@ -166,6 +177,6 @@ class SessionRegistry:
         return IssuedTokens(
             token=secrets.token_urlsafe(32),
             token_expires_mono_ns=now_mono_ns + self._token_ttl_ns,
-            resume_token=secrets.token_urlsafe(32),
-            resume_expires_mono_ns=now_mono_ns + self._resume_ttl_ns,
+            refresh_token=secrets.token_urlsafe(32),
+            refresh_expires_mono_ns=now_mono_ns + self._refresh_ttl_ns,
         )

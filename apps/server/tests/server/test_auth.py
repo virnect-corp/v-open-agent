@@ -1,4 +1,4 @@
-"""TASK-17 device credentials, sessions and resume rotation (SPEC 7.1, ADR-0002; COM-01, DEV-01)."""
+"""TASK-17 device credentials, sessions and refresh rotation (SPEC 7.1, ADR-0002, ADR-0005)."""
 
 import shutil
 from datetime import datetime
@@ -38,7 +38,7 @@ def workdir(tmp_path: Path) -> Path:
 
 def make_client(workdir: Path, mono: FakeMono | None = None, **env: str) -> TestClient:
     settings = Settings.from_env(
-        {"VOA_TOKEN_TTL_S": "60", "VOA_RESUME_TOKEN_TTL_S": "600"}
+        {"VOA_TOKEN_TTL_S": "60", "VOA_REFRESH_TOKEN_TTL_S": "600"}
         | {f"VOA_{k}": v for k, v in env.items()},
         base_dir=workdir,
     )
@@ -93,18 +93,18 @@ def test_create_session_issues_tokens_and_records_session(workdir: Path) -> None
         "session_id",
         "token",
         "token_expires_at_utc",
-        "resume_token",
-        "resume_token_expires_at_utc",
+        "refresh_token",
+        "refresh_token_expires_at_utc",
         "heartbeat_ms",
         "watchdog_ms",
     }
     assert data["session_id"].startswith("sess_")
-    assert data["token"] != data["resume_token"]
-    assert len(data["token"]) == 43 and len(data["resume_token"]) == 43  # token_urlsafe(32)
+    assert data["token"] != data["refresh_token"]
+    assert len(data["token"]) == 43 and len(data["refresh_token"]) == 43  # token_urlsafe(32)
     assert (data["heartbeat_ms"], data["watchdog_ms"]) == (1000, 3000)
     assert data["token_expires_at_utc"].endswith("Z")
     assert utc(data["token_expires_at_utc"]) == runtime.clock.at(mono.now + 60 * S)
-    assert utc(data["resume_token_expires_at_utc"]) == runtime.clock.at(mono.now + 600 * S)
+    assert utc(data["refresh_token_expires_at_utc"]) == runtime.clock.at(mono.now + 600 * S)
     # The server's connection belongs to its event-loop thread; reopen the file here.
     with SQLiteStore(workdir / "var" / "voa.sqlite3") as store:
         row = store.get_session(data["session_id"])
@@ -116,7 +116,7 @@ def test_only_token_digests_are_kept_in_memory(workdir: Path) -> None:
         data = c.post("/v1/sessions", json=body()).json()
         session = c.app.state.runtime.sessions.get(data["session_id"])  # type: ignore[attr-defined]
     stored = repr(vars(session))
-    assert data["token"] not in stored and data["resume_token"] not in stored
+    assert data["token"] not in stored and data["refresh_token"] not in stored
     assert session.access_digest == token_digest(data["token"])
 
 
@@ -208,48 +208,52 @@ def test_non_json_body_is_400(workdir: Path) -> None:
     assert (response.status_code, response.json()) == (400, {"code": "invalid_request"})
 
 
-# --- Resume rotation (ADR-0002) ---
+# --- Refresh rotation (ADR-0002) ---
 
 
-def test_resume_rotates_both_tokens_once(workdir: Path) -> None:
+def test_refresh_rotates_both_tokens_once(workdir: Path) -> None:
     mono = FakeMono()
     with make_client(workdir, mono) as c:
         first = c.post("/v1/sessions", json=body()).json()
         sid = first["session_id"]
         mono.now += 10 * S
         response = c.post(
-            f"/v1/sessions/{sid}/resume", json={"resume_token": first["resume_token"]}
+            f"/v1/sessions/{sid}/refresh", json={"refresh_token": first["refresh_token"]}
         )
         assert response.status_code == 200
         second = response.json()
         assert set(second) == {
             "token",
             "token_expires_at_utc",
-            "resume_token",
-            "resume_token_expires_at_utc",
+            "refresh_token",
+            "refresh_token_expires_at_utc",
         }
         assert second["token"] != first["token"]
-        assert second["resume_token"] != first["resume_token"]
+        assert second["refresh_token"] != first["refresh_token"]
         sessions = c.app.state.runtime.sessions  # type: ignore[attr-defined]
         assert not sessions.verify_access(sid, first["token"], mono.now)  # old access revoked
         assert sessions.verify_access(sid, second["token"], mono.now)
-        reuse = c.post(f"/v1/sessions/{sid}/resume", json={"resume_token": first["resume_token"]})
+        reuse = c.post(
+            f"/v1/sessions/{sid}/refresh", json={"refresh_token": first["refresh_token"]}
+        )
         assert (reuse.status_code, reuse.json()) == (401, {"code": "unauthorized"})
-        again = c.post(f"/v1/sessions/{sid}/resume", json={"resume_token": second["resume_token"]})
+        again = c.post(
+            f"/v1/sessions/{sid}/refresh", json={"refresh_token": second["refresh_token"]}
+        )
         assert again.status_code == 200
 
 
 @pytest.mark.parametrize("case", ["wrong_token", "unknown_session", "other_session"])
-def test_resume_failures_are_401(workdir: Path, case: str) -> None:
+def test_refresh_failures_are_401(workdir: Path, case: str) -> None:
     with make_client(workdir) as c:
         a = c.post("/v1/sessions", json=body()).json()
         b = c.post("/v1/sessions", json=body()).json()
         sid, token = {
             "wrong_token": (a["session_id"], "x" * 43),
-            "unknown_session": ("sess_missing", a["resume_token"]),
-            "other_session": (b["session_id"], a["resume_token"]),
+            "unknown_session": ("sess_missing", a["refresh_token"]),
+            "other_session": (b["session_id"], a["refresh_token"]),
         }[case]
-        response = c.post(f"/v1/sessions/{sid}/resume", json={"resume_token": token})
+        response = c.post(f"/v1/sessions/{sid}/refresh", json={"refresh_token": token})
     assert (response.status_code, response.json()) == (401, {"code": "unauthorized"})
 
 
@@ -267,23 +271,25 @@ def test_access_token_expires_at_ttl(workdir: Path) -> None:
         assert not sessions.verify_access("sess_other", data["token"], mono.now)
 
 
-def test_resume_token_expires_at_ttl(workdir: Path) -> None:
+def test_refresh_token_expires_at_ttl(workdir: Path) -> None:
     mono = FakeMono()
     with make_client(workdir, mono) as c:
         data = c.post("/v1/sessions", json=body()).json()
         mono.now += 600 * S
         response = c.post(
-            f"/v1/sessions/{data['session_id']}/resume", json={"resume_token": data["resume_token"]}
+            f"/v1/sessions/{data['session_id']}/refresh",
+            json={"refresh_token": data["refresh_token"]},
         )
     assert response.status_code == 401
 
 
-def test_resume_after_server_restart_is_401(workdir: Path) -> None:
+def test_refresh_after_server_restart_is_401(workdir: Path) -> None:
     with make_client(workdir) as c:
         data = c.post("/v1/sessions", json=body()).json()
     with make_client(workdir) as restarted:
         response = restarted.post(
-            f"/v1/sessions/{data['session_id']}/resume", json={"resume_token": data["resume_token"]}
+            f"/v1/sessions/{data['session_id']}/refresh",
+            json={"refresh_token": data["refresh_token"]},
         )
     assert response.status_code == 401
 
