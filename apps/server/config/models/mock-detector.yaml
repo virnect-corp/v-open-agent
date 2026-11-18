@@ -1,0 +1,12 @@
+# Built-in mock model (no weights). Emitted by voa.providers.mock.MockVisionProvider.
+model_id: mock-detector
+revision: "0"
+kind: object_detection
+labels: [person, obstacle]
+weights: builtin
+sha256: null
+license: same-as-project
+license_evidence_url: apps/server/pyproject.toml
+redistribution_allowed: true
+reviewed_at: 2026-11-18
+reviewer: voa-maintainers
