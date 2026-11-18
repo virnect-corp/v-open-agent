@@ -1,4 +1,4 @@
-# technical specification - 판단 엔진 중심 v0.4
+# technical specification - 판단 엔진 중심 v0.5
 
 > **무엇을 만들지**는 `01-product-requirements.md`, **어떻게 만들지**는 이 문서, **모듈과 팀 경계**는 `03-collaboration-architecture.md`, **어떤 순서로 만들지**는 `04-implementation-plan.md`에 있다.
 > 이 문서는 **구현에 필요한 결정을 모두 확정한 상태**다. 필드명, 상태, enum, 전이 조건, 계산식은 여기 적힌 그대로 구현한다.
@@ -116,12 +116,12 @@ class Observation(BaseModel):
     session_id: str
     device_id: str
     stream_id: str  # 센서 이름: camera_0, mic_0
-    seq: int  # >= 0. (session_id, stream_id, source_kind) 범위에서 단조 증가 (D-04)
+    seq: int  # >= 0. (session_id, stream_id, source_kind, model_id) 범위에서 단조 증가 (D-04, ADR-0004)
     capture_ts_monotonic_ns: int  # 장치 monotonic. 같은 (stream, kind) 안의 순서 비교에만 사용
     received_at_utc: datetime  # 서버 벽시계. 로그/표시 전용, 판단에는 사용하지 않음
     server_received_mono_ns: int  # 서버 monotonic. 신선도 판정의 유일한 기준
     clock_quality: ClockQuality
-    model: ModelRef | None  # mock: ModelRef(id="mock-detector", revision="0")
+    model: ModelRef | None  # 영상 계열은 필수. mock: ModelRef(id="mock-detector", revision="0")
     quality_flags: frozenset[QualityFlag] = frozenset()
     payload: Payload  # Field(discriminator="kind")
 
@@ -204,6 +204,8 @@ class ObservationDraft(BaseModel):  # 장치/시뮬레이터/Provider 가 만드
     quality_flags: frozenset[QualityFlag] = frozenset()
     payload: Payload
 ```
+**모델 출처 (ADR-0004)**: `payload.kind`가 `object_detection` 또는 `track_state`이면 `model`이 반드시 있어야 한다(`ObservationDraft`와 `Observation` 모두 검증, 없으면 스키마 오류). 다른 kind는 `model`이 없어도 된다. 관측의 **모델 키** `model_id`는 `model.id`이고 `model`이 없으면 빈 문자열 `""`이다. 한 카메라 프레임을 여러 모델이 분석하면 모델마다 같은 `frame_id`로 관측을 하나씩 내고, `seq`는 모델마다 독립적으로 증가한다.
+
 Gateway(또는 재생기)는 Draft에 `schema_version`, `observation_id`, `session_id`, `device_id`, `server_received_mono_ns`, `received_at_utc`를 붙여 `Observation`을 만든다. `clock_quality`는 기록용이며 엔진 판단에는 쓰지 않는다.
 
 `speaker_role="authenticated_user"`는 PTT 같은 입력 채널이 인증됐다는 뜻일 뿐, 음성으로 신원을 인증했다는 뜻이 아니다.
@@ -310,8 +312,8 @@ class StepResult:
 | 0 | profile 무효 | `config_error` |
 | 1 | `session_id`, `device_id`가 엔진과 일치 | `rejected_session_mismatch` |
 | 2 | `observation_id`를 이미 받았음 (window 보존 기간 내) | `duplicate` |
-| 3 | `seq ≤ last_seq[(stream_id, source_kind)]` | `out_of_order` |
-| 4 | `capture_ts_monotonic_ns < last_capture[(stream_id, source_kind)]` | `out_of_order` |
+| 3 | `seq ≤ last_seq[(stream_id, source_kind, model_id)]` | `out_of_order` |
+| 4 | `capture_ts_monotonic_ns < last_capture[(stream_id, source_kind, model_id)]` | `out_of_order` |
 | 5 | `now_mono_ns - server_received_mono_ns > staleness_ms × 1e6` (도착했을 때 이미 오래됨) | `stale_on_arrival` |
 | — | 통과 | `accepted` |
 
@@ -320,12 +322,12 @@ class StepResult:
 - 아직 `accepted` 관측이 없는 key는 3/4번 검사를 통과한 것으로 본다.
 
 ### 4.3 단계 2 — Window / Freshness
-- **Window**: key `(stream_id, source_kind)`마다 `deque`를 둔다. 최근 `window_max_items`개만 유지하고, 나이가 `window_ms`를 넘은 항목은 매 호출마다 제거한다. `observation_id → Observation` 인덱스도 함께 유지하고 같이 제거한다.
+- **Window**: key `(stream_id, source_kind, model_id)`마다 `deque`를 둔다(ADR-0004). 최근 `window_max_items`개만 유지하고, 나이가 `window_ms`를 넘은 항목은 매 호출마다 제거한다. `observation_id → Observation` 인덱스도 함께 유지하고 같이 제거한다.
 - **신선도**: 관측 o는 `now_mono_ns - o.server_received_mono_ns ≤ staleness_ms × 1e6`일 때 *fresh*다.
 - **센서 상태** `sensor_down[stream_id]`: `health` 관측(`stream_id` = 대상 센서)의 `status == "down"`이면 True, `"ok"`나 `"degraded"`이면 False가 된다. 기본값은 False다.
 
 ### 4.4 단계 3 — Frame Assembly (시나리오별)
-- 시나리오마다 조립 버퍼(`frame_id` → kind별 관측)를 따로 둔다. `stream_id ∈ required_streams`이고 `source_kind ∈ required_kinds`인 accepted 관측만 넣는다.
+- 시나리오마다 조립 버퍼(`frame_id` → kind별 관측)를 따로 둔다. `stream_id ∈ required_streams`, `source_kind ∈ required_kinds`, `model_id == required_models[source_kind]`인 accepted 관측만 넣는다. 다른 모델이 같은 `frame_id`로 낸 관측은 이 시나리오의 프레임을 완성하지 못한다(ADR-0004). 따라서 근거 모델이 멈추면 다른 모델이 돌고 있어도 그 시나리오는 행 2(`input_stale`)로 `unknown`이 된다.
 - 한 `frame_id`에 `required_kinds`가 **모두** 모이면 그 프레임은 "완성"이고, 그 시나리오에 대해 **딱 한 번** 평가한 뒤 버퍼에서 지운다. 같은 frame_id로 늦게 도착한 관측은 무시한다(완성된 frame_id 집합은 `window_ms` 동안 기억).
 - **완성 시점에 신선도를 다시 확인**한다. 프레임 관측 중 하나라도 fresh가 아니면 그 프레임은 평가하지 않고 버린다(INV-02 보장).
 - 완성되지 않은 프레임은 평가하지 않는다. 예를 들어 tracker가 멈춰 detection만 들어오면 track 시나리오의 프레임이 완성되지 않고, 결국 행 2(`input_stale`)로 `unknown`이 된다.
@@ -435,6 +437,7 @@ params:                       # 단위는 이름의 접미사를 따른다. 값�
 scenarios:
   - id: moving_object_in_attention_zone
     required_kinds: [object_detection, track_state]
+    required_models: {object_detection: mock-detector, track_state: mock-tracker}
     required_streams: [camera_0]
     labels: [person]
     motion_classes: [moving]
@@ -444,6 +447,7 @@ scenarios:
     severity: attention
   - id: visible_obstacle_in_corridor
     required_kinds: [object_detection]
+    required_models: {object_detection: mock-detector}
     required_streams: [camera_0]
     labels: [obstacle]
     motion_classes: []        # detection 시나리오는 반드시 빈 리스트, track 시나리오는 1개 이상
@@ -459,6 +463,12 @@ scenarios:
 - `motion_classes` 규칙 위반, 위 범위 조건 위반
 - `warning_text`나 `degraded_notice_text`가 비어 있거나, `roi`가 BBox 규칙 위반
 - 시나리오가 1개도 없음
+- `required_models`의 key 집합이 `required_kinds`와 다름, 값이 ID 규칙 위반 (ADR-0004)
+
+**모델 manifest 대조** (ADR-0004, CON-04) — `voa.config`가 수행한다(엔진은 파일을 읽지 않음). `voa.config.model_registry.load_manifests(dir)`가 `apps/server/config/models/*.yaml`을 읽고, `check_profile_models(profile, manifests) -> ProfileError | None`가 시나리오마다 다음을 확인한다. 위반은 `ProfileError("profile_invalid", detail)`이며 detail에는 시나리오 ID와 위반 항목 이름만 담는다.
+- `required_models`의 모든 모델 ID에 manifest가 있음
+- manifest의 `kind`가 그 key(`source_kind`)와 같음
+- 시나리오 `labels`가 `object_detection` 근거 모델 manifest의 `labels` 안에 있음. track 시나리오는 `track_state` 근거 모델의 `labels`에도 있어야 함
 
 `ProfileErrorCode = Literal["file_not_found", "yaml_invalid", "profile_invalid"]`이다. `detail`은 파일 경로와 검증 위치만 담고 YAML 원문, secret, token을 담지 않는다. YAML root가 mapping이 아니거나 YAML 파싱이 실패하면 `yaml_invalid`, Pydantic 검증 실패는 `profile_invalid`이다.
 
@@ -714,6 +724,8 @@ VOA_MODEL_AUTO_DOWNLOAD=false
 | 용도 | 후보 | 라이선스 상태 |
 |---|---|---|
 | 객체 탐지 | YOLOX-Nano/Tiny | 코드 Apache-2.0 / 체크포인트 `review_required` |
+| open-vocabulary 탐지 (ADR-0004) | OmDet-Turbo swin-tiny (기본), OWLv2 base, Grounding DINO tiny | 모델 카드 Apache-2.0 / 원문 `review_required` |
+| 미세조정 탐지 (ADR-0004) | RT-DETR, RF-DETR (Apache-2.0 크기만, `rfdetr[plus]`와 PML 크기 제외) | 모델 카드/저장소 Apache-2.0 / 학습 데이터셋 라이선스 별도 `review_required` |
 | 추적 | ByteTrack | MIT 후보 / `review_required` |
 | 소리 이벤트 | YAMNet 또는 대체 | `review_required` |
 | 한국어 STT | 소형 오픈 ASR (모델명은 Stage D 진입 시 확정) | `review_required` |
@@ -721,7 +733,12 @@ VOA_MODEL_AUTO_DOWNLOAD=false
 | 설명 VLM | 소형 오픈 VLM (모델명은 Stage E 진입 시 확정) | `review_required` |
 
 - 기본 설치에서 제외: Ultralytics(AGPL), NC 가중치(예: Depth Anything V2 Base 이상)
-- 모델 manifest: `apps/server/config/models/<id>.yaml` = `{model_id, revision, sha256, license, license_evidence_url, redistribution_allowed, reviewed_at, reviewer}`
+- 모델 manifest: `apps/server/config/models/<id>.yaml` = `{model_id, revision, kind, labels, weights, sha256, license, license_evidence_url, redistribution_allowed, reviewed_at, reviewer}` (ADR-0004)
+  - `kind`: 이 모델이 내는 관측 kind (`object_detection` 또는 `track_state`)
+  - `labels`: 이 모델이 낼 수 있는 label 목록(1개 이상, 중복 없음). open-vocabulary 모델은 설정한 텍스트 프롬프트 목록, 미세조정 모델은 학습 라벨 목록이다
+  - `weights`: `builtin`(가중치 없음, mock) 또는 `file`. `file`이면 `sha256`이 필수이고 가중치는 사용자가 직접 받은 로컬 파일에서 읽는다(자동 다운로드 금지)
+  - 기본 manifest: `mock-detector`(`object_detection`, labels `[person, obstacle]`), `mock-tracker`(`track_state`, labels `[person]`), 둘 다 `weights: builtin`
+- 모델 조달 방침(ADR-0004 §5): open-vocabulary Provider(기본 후보 OmDet-Turbo, 대체 OWLv2, Grounding DINO tiny)로 시나리오 후보를 검증하고, 정확도가 필요하면 RT-DETR 또는 RF-DETR(Apache-2.0 크기만)를 허용 라이선스 데이터셋으로 미세조정한다. 후보 라이선스는 등록 전 원문 확인(`review_required`)
 
 ### 9.1 Python dependency registry
 
