@@ -29,7 +29,7 @@ REPO = Path(__file__).resolve().parents[4]
 SCENARIOS = REPO / "contracts" / "fixtures" / "scenarios"
 PROFILE_PATH = REPO / "apps" / "server" / "config" / "profiles" / "indoor_research_v0.yaml"
 UC_FIXTURES = [
-    "uc01_obstacle_warning",
+    "uc01_obstacle",
     "uc02_moving_person",
     "uc03_input_lost",
     "uc04_obstacle_cleared",
@@ -87,7 +87,7 @@ def test_fixture_replay_is_byte_identical(name: str) -> None:
 def test_use_case_stories() -> None:
     """Each fixture demonstrates the story it is named after (PRD UC table)."""
     states = {name: [(d.previous_state, d.state) for d in replay(name)] for name in UC_FIXTURES}
-    assert ("candidate", "warning") in states["uc01_obstacle_warning"]
+    assert ("candidate", "warning") in states["uc01_obstacle"]
     assert states["uc02_moving_person"][-1] == ("warning", "unknown")
     assert states["uc03_input_lost"][-1] == ("warning", "unknown")
     assert ("warning", "resolved") not in states["uc03_input_lost"]
@@ -189,7 +189,7 @@ def test_expected_view_includes_alert_id_only_with_alert() -> None:
         ]
     )
     assert "alert_id" not in rows[0]
-    warning = replay("uc01_obstacle_warning")[1]
+    warning = replay("uc01_obstacle")[1]
     assert decision_view(warning)["alert_id"] == "alert_0001"
 
 
