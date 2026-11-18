@@ -1,0 +1,4 @@
+{"scenario_id":"moving_object_in_attention_zone","previous_state":"unknown","state":"candidate","reason_codes":["fresh_evidence_returned"],"evidence_ids":["obs_0000","obs_0001"],"risk_event_id":"risk_0001"}
+{"scenario_id":"visible_obstacle_in_corridor","previous_state":"unknown","state":"clear","reason_codes":["condition_absent_confirmed"],"evidence_ids":["obs_0004"],"risk_event_id":"none"}
+{"scenario_id":"moving_object_in_attention_zone","previous_state":"candidate","state":"warning","reason_codes":["temporal_confirmation_passed"],"evidence_ids":["obs_0004","obs_0005"],"risk_event_id":"risk_0001","alert_id":"alert_0001"}
+{"scenario_id":"moving_object_in_attention_zone","previous_state":"warning","state":"unknown","reason_codes":["input_stale","quality_blocked"],"evidence_ids":[],"risk_event_id":"risk_0001"}
