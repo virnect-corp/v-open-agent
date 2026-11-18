@@ -1,0 +1,12 @@
+# Test-only manifest for T-R19 (two_models.yaml). No weights exist.
+model_id: fire-detector
+revision: "0"
+kind: object_detection
+labels: [fire]
+weights: builtin
+sha256: null
+license: same-as-project
+license_evidence_url: apps/server/pyproject.toml
+redistribution_allowed: true
+reviewed_at: 2026-11-18
+reviewer: test-fixture

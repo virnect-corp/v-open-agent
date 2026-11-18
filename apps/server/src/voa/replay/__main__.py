@@ -9,6 +9,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from voa.config.model_registry import check_profile_models, load_manifests
 from voa.config.profile_loader import load_profile
 from voa.engine.ports import FixedEpochClock
 from voa.engine.profile import ProfileError
@@ -16,12 +17,14 @@ from voa.replay.runner import first_mismatch, percentile, run_events
 from voa.simulator.fixture import FixtureError, load_expected, load_fixture
 
 DEFAULT_PROFILE = Path(__file__).resolve().parents[3] / "config/profiles/indoor_research_v0.yaml"
+DEFAULT_MODELS = Path(__file__).resolve().parents[3] / "config/models"
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m voa.replay", description=__doc__)
     parser.add_argument("fixture", type=Path)
     parser.add_argument("--profile", type=Path, default=DEFAULT_PROFILE)
+    parser.add_argument("--models", type=Path, default=DEFAULT_MODELS, help="model manifests")
     parser.add_argument("--expected", type=Path)
     return parser
 
@@ -38,6 +41,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if isinstance(profile, ProfileError):
         # An invalid profile decides nothing (INV-10); exiting 0 would look like a pass.
         return _fail(f"profile {profile.code}: {profile.detail}")
+
+    # Every scenario's required model must be registered with the right kind and labels.
+    manifests = load_manifests(args.models)
+    problem = (
+        manifests
+        if isinstance(manifests, ProfileError)
+        else check_profile_models(profile, manifests)
+    )
+    if problem is not None:
+        return _fail(f"profile {problem.code}: {problem.detail}")
 
     try:
         events = load_fixture(args.fixture, FixedEpochClock())

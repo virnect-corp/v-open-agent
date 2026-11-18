@@ -132,6 +132,8 @@ def test_tr19_fixture_through_replay_cli(capsys: pytest.CaptureFixture[str]) -> 
             f"{TR19}.jsonl",
             "--profile",
             str(FIXTURES / "two_models.yaml"),
+            "--models",
+            str(FIXTURES.parent / "models"),
             "--expected",
             f"{TR19}.expected.jsonl",
         ]

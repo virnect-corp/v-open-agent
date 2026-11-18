@@ -1,0 +1,12 @@
+# Built-in mock model (no weights). Emitted by voa.providers.mock.MockVisionProvider.
+model_id: mock-tracker
+revision: "0"
+kind: track_state
+labels: [person]
+weights: builtin
+sha256: null
+license: same-as-project
+license_evidence_url: apps/server/pyproject.toml
+redistribution_allowed: true
+reviewed_at: 2026-11-18
+reviewer: voa-maintainers
