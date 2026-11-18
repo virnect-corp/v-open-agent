@@ -9,7 +9,7 @@ in time.
 import asyncio
 import contextlib
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI, WebSocket
@@ -19,6 +19,7 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 from voa.contracts.messages import (
     CLIENT_TYPES,
     AckMessage,
+    AlertMessage,
     AuthMessage,
     AuthOkMessage,
     ClientEnvelope,
@@ -59,6 +60,19 @@ async def _send(websocket: WebSocket, message: BaseModel) -> None:
     await websocket.send_text(message.model_dump_json())
 
 
+async def _push(
+    runtime: "ServerRuntime",
+    stream: SessionStream,
+    websocket: WebSocket,
+    messages: Sequence[BaseModel],
+) -> None:
+    """Send in order; an alert becomes `sent` only after its frame was written."""
+    for message in messages:
+        await _send(websocket, message)
+        if isinstance(message, AlertMessage):
+            stream.mark_sent(message.alert.alert_id, runtime.mono_ns())
+
+
 async def tick_loop(runtime: "ServerRuntime", stream: SessionStream) -> None:
     """Runs from session creation; pushes to the connected socket if there is one."""
     interval = runtime.settings.tick_interval_ms / 1000
@@ -69,8 +83,7 @@ async def tick_loop(runtime: "ServerRuntime", stream: SessionStream) -> None:
         if websocket is None:
             continue  # delivery while disconnected is handled on resume (TASK-20)
         with contextlib.suppress(WebSocketDisconnect, RuntimeError):
-            for message in messages:
-                await _send(websocket, message)
+            await _push(runtime, stream, websocket, messages)
 
 
 async def _heartbeat_loop(
@@ -153,11 +166,11 @@ async def _serve(runtime: "ServerRuntime", stream: SessionStream, websocket: Web
         elif isinstance(message, ResumeMessage):
             stream.last_alert_seq = message.last_alert_seq
         elif isinstance(message, AckMessage):
-            pass  # delivery state transitions are TASK-19
+            # Unknown alert IDs are ignored; ACKs are idempotent (SPEC 7.3).
+            stream.ack(message.alert_id, message.status, runtime.mono_ns())
         elif isinstance(message, ObservationMessage):
             draft = message.observation
             if not stream.accepts_stream(draft.stream_id):
                 await _send(websocket, error_message("stream_not_declared"))
                 continue
-            for push in stream.ingest(draft, runtime.mono_ns()):
-                await _send(websocket, push)
+            await _push(runtime, stream, websocket, stream.ingest(draft, runtime.mono_ns()))

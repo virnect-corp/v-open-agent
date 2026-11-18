@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import secrets
 from dataclasses import dataclass
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -49,6 +50,11 @@ class CreateSessionRequest(BaseModel):
     device_id: Id
     secret: str | None = Field(default=None, max_length=1024)
     capabilities: Capabilities
+
+
+class AckRequest(BaseModel):
+    model_config = MODEL_CONFIG
+    status: Literal["received", "played"]
 
 
 class RefreshRequest(BaseModel):
@@ -165,6 +171,16 @@ class SessionRegistry:
         session.refresh_digest = token_digest(tokens.refresh_token)
         session.refresh_expires_mono_ns = tokens.refresh_expires_mono_ns
         return tokens
+
+    def session_for_access(self, token: str, now_mono_ns: int) -> str | None:
+        """Bearer lookup for session-scoped REST APIs (SPEC 7.1)."""
+        digest = token_digest(token)
+        found = None
+        for session in self._sessions.values():
+            valid = now_mono_ns < session.access_expires_mono_ns
+            if hmac.compare_digest(session.access_digest, digest) and valid:
+                found = session.session_id
+        return found
 
     def verify_access(self, session_id: str, token: str, now_mono_ns: int) -> bool:
         """Checked at WebSocket handshake; an expired token is invalid from its expiry on."""
