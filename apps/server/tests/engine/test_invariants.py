@@ -38,6 +38,8 @@ SESSION, DEVICE = "sess_0001", "dev_0001"
 MOVING = "moving_object_in_attention_zone"
 OBSTACLE = "visible_obstacle_in_corridor"
 MODEL = ModelRef(id="mock-detector", revision="0")
+TRACKER = ModelRef(id="mock-tracker", revision="0")
+AUX = ModelRef(id="aux-detector", revision="0")  # referenced by no scenario (ADR-0004)
 OBSTACLE_BLOCKING: frozenset[QualityFlag] = frozenset({"occluded", "frame_dropped"})
 MOVING_BLOCKING: frozenset[QualityFlag] = frozenset(
     {"occluded", "camera_motion_uncompensated", "frame_dropped"}
@@ -63,7 +65,7 @@ WARNING_TEXT = {scenario.id: scenario.warning_text for scenario in PROFILE.scena
 
 @dataclass(frozen=True)
 class Action:
-    kind: str  # obstacle, person, health, tick, dup, ooo, stale, foreign
+    kind: str  # obstacle, person, health, tick, dup, ooo, stale, foreign, aux
     dt_ms: int
     variant: str = ""
     flags: frozenset[QualityFlag] = frozenset()
@@ -83,8 +85,8 @@ def generate(seed: int, length: int = 90) -> list[Action]:
 
     while len(actions) < length:
         kind = rng.choices(
-            ["obstacle", "person", "health", "tick", "dup", "ooo", "stale", "foreign"],
-            weights=[30, 25, 5, 10, 3, 3, 3, 2],
+            ["obstacle", "person", "health", "tick", "dup", "ooo", "stale", "foreign", "aux"],
+            weights=[30, 25, 5, 10, 3, 3, 3, 2, 6],
         )[0]
         if kind == "obstacle":
             variant = rng.choices(["met", "absent", "blocked"], weights=[5, 4, 1])[0]
@@ -144,7 +146,7 @@ class Runner:
     shadow: DecisionEngine | None = None  # INV-07 twin: rejected steps replaced by tick
     now: int = 0
     count: int = 0
-    seqs: dict[tuple[str, str], int] = field(default_factory=dict)
+    seqs: dict[tuple[str, str, str], int] = field(default_factory=dict)
     last: Observation | None = None
     camera_down: bool = False
     calls: list[Call] = field(default_factory=list)
@@ -158,9 +160,12 @@ class Runner:
         received: int | None = None,
         session_id: str = SESSION,
         bump_seq: bool = True,
+        model: ModelRef | None = None,
     ) -> Observation:
         self.count += 1
-        key = (stream, payload.kind)
+        if model is None:
+            model = TRACKER if payload.kind == "track_state" else MODEL
+        key = (stream, payload.kind, model.id)
         seq = self.seqs.get(key, -1) + 1
         if bump_seq:
             self.seqs[key] = seq
@@ -172,7 +177,7 @@ class Runner:
             seq=seq,
             capture_ts_monotonic_ns=self.now,
             server_received_mono_ns=self.now if received is None else received,
-            model=MODEL,
+            model=model,
             quality_flags=flags,
             payload=payload,
         )
@@ -295,6 +300,21 @@ class Runner:
         )
         late = self.now - STALENESS_NS - MS
         self._step(self._new(payload, received=late, bump_seq=False), {}, own=False)
+
+    def _do_aux(self, action: Action) -> None:
+        """Another model reports an obstacle on a frame the scenario model never saw (ADR-0004).
+
+        No scenario names aux-detector, so it must be accepted (own seq) and never
+        count as evidence: the oracle records no verdict for it. A fresh frame_id is
+        used on purpose; a completed frame_id would be ignored even without the
+        model filter and would hide the bug this action is meant to expose.
+        """
+        payload = DetectionPayload(
+            kind="object_detection",
+            frame_id=f"af_{self.count + 1:05d}",
+            detections=[Detection(label="obstacle", bbox=(0.3, 0.5, 0.7, 0.9), score=0.9)],
+        )
+        self._step(self._new(payload, model=AUX), {}, own=True)
 
     def _do_foreign(self, action: Action) -> None:
         payload = DetectionPayload(

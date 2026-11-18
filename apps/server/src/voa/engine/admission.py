@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from voa.contracts.enums import SourceKind
-from voa.contracts.observation import Observation
+from voa.contracts.observation import Observation, model_id_of
 from voa.engine.profile import PolicyProfile, ProfileError
 
 AdmissionStatus = Literal[
@@ -16,7 +16,12 @@ AdmissionStatus = Literal[
     "config_error",
 ]
 
-AdmissionKey = tuple[str, SourceKind]
+# (stream_id, source_kind, model_id): several models may analyse one frame (ADR-0004).
+AdmissionKey = tuple[str, SourceKind, str]
+
+
+def admission_key(observation: Observation) -> AdmissionKey:
+    return (observation.stream_id, observation.source_kind, model_id_of(observation))
 
 
 @dataclass(frozen=True)
@@ -39,7 +44,7 @@ class Admission:
         if observation.observation_id in self._observation_ids:
             return "duplicate"
 
-        key = (observation.stream_id, observation.source_kind)
+        key = admission_key(observation)
         last_seq = self._last_seq.get(key)
         if last_seq is not None and observation.seq <= last_seq:
             return "out_of_order"

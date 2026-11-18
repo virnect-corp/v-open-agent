@@ -1,0 +1,35 @@
+# T-R19 (ADR-0004): two scenarios backed by two different models on one camera.
+profile_id: two_models_test
+profile_version: 1
+degraded_notice_text: "카메라 상태를 확인할 수 없어 감지가 제한됩니다."
+params:
+  min_score: 0.5
+  roi_min_overlap: 0.3
+  confirm_frames: 3
+  clear_frames: 3
+  staleness_ms: 1000
+  unknown_after_ms: 1500
+  warning_ttl_ms: 4000
+  window_ms: 5000
+  window_max_items: 256
+scenarios:
+  - id: crack_on_surface
+    required_kinds: [object_detection]
+    required_models: {object_detection: crack-detector}
+    required_streams: [camera_0]
+    labels: [crack]
+    motion_classes: []
+    roi: [0.0, 0.0, 1.0, 1.0]
+    blocking_flags: [occluded, frame_dropped]
+    warning_text: "표면에 균열 의심 부위가 있습니다."
+    severity: attention
+  - id: fire_in_view
+    required_kinds: [object_detection]
+    required_models: {object_detection: fire-detector}
+    required_streams: [camera_0]
+    labels: [fire]
+    motion_classes: []
+    roi: [0.0, 0.0, 1.0, 1.0]
+    blocking_flags: [occluded, frame_dropped]
+    warning_text: "화재 의심 장면이 보입니다."
+    severity: attention
