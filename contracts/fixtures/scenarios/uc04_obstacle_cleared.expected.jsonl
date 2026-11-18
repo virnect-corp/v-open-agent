@@ -1,0 +1,4 @@
+{"scenario_id":"visible_obstacle_in_corridor","previous_state":"unknown","state":"candidate","reason_codes":["fresh_evidence_returned"],"evidence_ids":["obs_0000"],"risk_event_id":"risk_0001"}
+{"scenario_id":"visible_obstacle_in_corridor","previous_state":"candidate","state":"warning","reason_codes":["temporal_confirmation_passed"],"evidence_ids":["obs_0002"],"risk_event_id":"risk_0001","alert_id":"alert_0001"}
+{"scenario_id":"visible_obstacle_in_corridor","previous_state":"warning","state":"resolved","reason_codes":["condition_absent_confirmed"],"evidence_ids":["obs_0005"],"risk_event_id":"risk_0001"}
+{"scenario_id":"visible_obstacle_in_corridor","previous_state":"resolved","state":"clear","reason_codes":["episode_closed"],"evidence_ids":["obs_0006"],"risk_event_id":"risk_0001"}
