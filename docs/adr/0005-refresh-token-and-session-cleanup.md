@@ -1,6 +1,6 @@
 # ADR-0005: resume token을 refresh token으로 부르고, refresh token이 만료된 세션은 정리한다
 
-- Status: accepted
+- Status: accepted (결정 2의 WebSocket `resume` 메시지 이름은 ADR-0006에서 `alert_sync`로 변경)
 - Date: 2026-11-18
 - Owners: Server, Contract, Android
 - Related: ADR-0002, COM-01, COM-04, SPEC §7.1, §8.1, §8.3, TASK-17, TASK-20, TASK-27

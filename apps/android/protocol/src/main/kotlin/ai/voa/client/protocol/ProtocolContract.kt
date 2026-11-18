@@ -32,7 +32,7 @@ object ProtocolContract {
 
     private val knownClientMessageTypes = setOf(
         "auth",
-        "resume",
+        "alert_sync",
         "observation",
         "ack",
     )

@@ -135,7 +135,7 @@ MVP-1에서는 시뮬레이터가 이 계약을 구현한다. 실기기 앱은 S
 | DEV-01 | 세션을 만들 때 입력/출력 capability를 선언한다. 출력이 없으면 세션을 거부하고, 선언하지 않은 입력이 필요한 시나리오는 unknown으로 둔다 | M | outputs=[] → 400, allowed 밖 → 400, camera_0 미선언 → 해당 시나리오 계속 unknown (T-R17) |
 | DEV-02 | alert를 선언된 모든 출력(HUD/speaker/haptic)으로 렌더링하고, alert_id당 1회만 재생한다. `received`는 수신 직후, `played`는 출력 하나 이상 완료 후 보낸다 | M | 시뮬레이터 출력 로그로 검증, 재전송된 alert는 재생 없이 played ACK만 |
 | DEV-03 | candidate/warning에서 unknown이 되면 서버가 `notice(degraded)`를 1회 보내고, 장치는 이를 출력한다 | M | 조건별 notice 0회/1회 검증 (T-R18) |
-| DEV-04 | 서버는 heartbeat를 주기적으로 보내고, 장치는 `watchdog_ms` 동안 무수신이면 내장 문구로 연결 끊김을 고지하고 backoff로 재접속한다 | M | 서버 중단 → 고지 1회 → 재접속 → resume (T-R16) |
+| DEV-04 | 서버는 heartbeat를 주기적으로 보내고, 장치는 `watchdog_ms` 동안 무수신이면 내장 문구로 연결 끊김을 고지하고 backoff로 재접속한다 | M | 서버 중단 → 고지 1회 → 재접속 → alert_sync (T-R16) |
 | DEV-05 | 장치는 센서 오류/복구를 `health` 관측으로 보고한다 | M | camera 오류 → down → unknown(`sensor_down`) |
 | DEV-06 | 실기기 미디어 입력(`frame`/`imu`/`audio_chunk`/`ptt_*`)과 서버 Provider 연결 | S | Stage C/D에서 메시지 형식 확정. MVP 서버는 `unsupported_message_type` 응답 |
 
@@ -194,7 +194,7 @@ MVP-1에서는 시뮬레이터가 이 계약을 구현한다. 실기기 앱은 S
 | T-R12 | ROI 안의 대상 track이 `quality=lost` | 프레임 indeterminate(`track_lost`), 카운터 초기화 | ENG-04, ENG-05 | A |
 | T-R13 | 무음 구간의 환각 전사 | 명령 처리 안 함 | INP-04 | D |
 | T-R14 | 정상 장면 장시간 | 경고 수/반복 기록 (FP/hour) | NFR-02 | C |
-| T-R16 | 서버 프로세스 중단 | 시뮬레이터가 `watchdog_ms` 안에 연결 끊김 고지 1회, 재접속 후 resume | DEV-04 | B |
+| T-R16 | 서버 프로세스 중단 | 시뮬레이터가 `watchdog_ms` 안에 연결 끊김 고지 1회, 재접속 후 alert_sync | DEV-04 | B |
 | T-R17 | `camera_0` 미선언 세션 | 영상 시나리오가 계속 unknown, warning 0건 | DEV-01 | B |
 | T-R18 | warning → 입력 끊김 → unknown, 그 뒤 clear → unknown | 첫 경우만 notice 1회, 두 번째는 0회 | DEV-03 | B |
 | T-R19 | 같은 `frame_id`를 균열 모델과 화재 모델이 각각 분석, 이후 화재 모델만 정지 | 두 관측 모두 accepted, 각 시나리오는 자기 모델 근거만 사용, 화재 시나리오만 unknown(`input_stale`) | ENG-19 | C |

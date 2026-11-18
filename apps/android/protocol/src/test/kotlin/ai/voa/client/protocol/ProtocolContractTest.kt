@@ -213,10 +213,10 @@ class ProtocolContractTest {
         )
         assertIs<ErrorMessage>(errorMsg)
 
-        val clientResume = ProtocolContract.decodeClientMessage(
-            """{"type":"resume","last_alert_seq":0}""",
+        val clientAlertSync = ProtocolContract.decodeClientMessage(
+            """{"type":"alert_sync","last_alert_seq":0}""",
         )
-        assertIs<ResumeMessage>(clientResume)
+        assertIs<AlertSyncMessage>(clientAlertSync)
 
         val clientAck = ProtocolContract.decodeClientMessage(
             """{"type":"ack","alert_id":"alert_01","status":"played"}""",
@@ -464,5 +464,15 @@ class ProtocolContractTest {
                     """"resume_token":"r2","resume_token_expires_at_utc":"2026-11-19T00:15:00Z"}""",
             )
         }
+    }
+
+    @Test
+    fun `alert_sync replaces the old resume message (ADR-0006)`() {
+        val encoded = ProtocolContract.json.encodeToString<ClientMessage>(AlertSyncMessage(lastAlertSeq = 3))
+        assertEquals("""{"type":"alert_sync","last_alert_seq":3}""", encoded)
+        val error = assertFailsWith<ProtocolParseException> {
+            ProtocolContract.decodeClientMessage("""{"type":"resume","last_alert_seq":0}""")
+        }
+        assertEquals(ProtocolParseException.CODE_UNSUPPORTED_MESSAGE_TYPE, error.errorCode)
     }
 }

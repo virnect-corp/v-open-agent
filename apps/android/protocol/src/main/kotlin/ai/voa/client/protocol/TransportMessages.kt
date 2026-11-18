@@ -132,8 +132,8 @@ data class AuthMessage(
 }
 
 @Serializable
-@SerialName("resume")
-data class ResumeMessage(
+@SerialName("alert_sync")
+data class AlertSyncMessage(
     @SerialName("last_alert_seq")
     val lastAlertSeq: Int,
 ) : ClientMessage {
