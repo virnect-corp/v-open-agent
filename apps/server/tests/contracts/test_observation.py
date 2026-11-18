@@ -210,6 +210,7 @@ def test_from_draft_adds_server_fields() -> None:
             "stream_id": "camera_0",
             "seq": 3,
             "capture_ts_monotonic_ns": 100,
+            "model": {"id": "mock-detector", "revision": "0"},
             "quality_flags": ["occluded"],
             "payload": det_payload([0.1, 0.1, 0.2, 0.2]),
         }
@@ -224,7 +225,7 @@ def test_from_draft_adds_server_fields() -> None:
     )
     assert o.schema_version == "0.1.0"
     assert o.clock_quality == "unknown"  # Draft 기본값
-    assert o.model is None
+    assert o.model is not None and o.model.id == "mock-detector"
     assert o.quality_flags == frozenset({"occluded"})
     assert o.seq == 3
 
@@ -248,6 +249,7 @@ def test_from_draft_rejects_non_utc() -> None:
             "stream_id": "camera_0",
             "seq": 0,
             "capture_ts_monotonic_ns": 0,
+            "model": {"id": "mock-detector", "revision": "0"},
             "payload": det_payload([0.1, 0.1, 0.2, 0.2]),
         }
     )

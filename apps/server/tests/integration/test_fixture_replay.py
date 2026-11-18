@@ -42,6 +42,7 @@ OBS_LINE = {
         "stream_id": "camera_0",
         "seq": 0,
         "capture_ts_monotonic_ns": 1,
+        "model": {"id": "mock-detector", "revision": "0"},
         "payload": {"kind": "object_detection", "frame_id": "f0", "detections": []},
     },
 }
@@ -162,7 +163,8 @@ def test_parser_fills_server_fields() -> None:
     assert obs.server_received_mono_ns == 5_000_000
     assert obs.received_at_utc == CLOCK.at(5_000_000)
     assert obs.capture_ts_monotonic_ns == 1
-    assert (obs.clock_quality, obs.model, obs.quality_flags) == ("unknown", None, frozenset())
+    assert (obs.clock_quality, obs.quality_flags) == ("unknown", frozenset())
+    assert obs.model == ModelRef(id="mock-detector", revision="0")
     assert second.observation.clock_quality == "synced"
     assert second.observation.model == ModelRef(id="m", revision="2")
     assert second.observation.quality_flags == frozenset({"occluded"})
@@ -201,6 +203,10 @@ def test_expected_view_includes_alert_id_only_with_alert() -> None:
     [
         ([line(OBS_LINE), line({"at_ms": 4, "tick": True})], 2),  # at_ms decreased
         ([line({"at_ms": 0})], 1),  # neither obs nor tick
+        (
+            [line({"at_ms": 0, "obs": {k: v for k, v in OBS_LINE["obs"].items() if k != "model"}})],  # type: ignore[attr-defined]
+            1,
+        ),  # vision observation without model (ADR-0004)
         ([line({**OBS_LINE, "tick": True})], 1),  # both
         ([line({"at_ms": 0, "tick": False})], 1),
         ([line({"at_ms": -1, "tick": True})], 1),

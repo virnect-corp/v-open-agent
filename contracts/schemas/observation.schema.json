@@ -453,7 +453,8 @@
         {
           "type": "null"
         }
-      ]
+      ],
+      "description": "Model that produced this observation. Required when payload.kind is object_detection or track_state (ADR-0004); optional for other kinds."
     },
     "observation_id": {
       "maxLength": 128,

@@ -46,6 +46,7 @@ class ScenarioProfile(BaseModel):
 
     id: Id
     required_kinds: list[SourceKind]
+    required_models: dict[SourceKind, Id]  # source_kind -> model_id (ADR-0004)
     required_streams: list[Id]
     labels: list[str]
     motion_classes: list[MotionClass]
@@ -71,6 +72,8 @@ class ScenarioProfile(BaseModel):
                 raise ValueError("track scenarios require motion_classes")
         else:
             raise ValueError("unsupported required_kinds combination")
+        if set(self.required_models) != set(self.required_kinds):
+            raise ValueError("required_models must name one model for each required kind")
         return self
 
 

@@ -60,6 +60,7 @@ def test_load_valid_profile_and_default_match_spec() -> None:
             [
                 "id",
                 "required_kinds",
+                "required_models",
                 "required_streams",
                 "labels",
                 "motion_classes",
