@@ -4,17 +4,18 @@ Importing this module never reads settings, files or the environment, and never
 starts a server: configuration is loaded in the lifespan of the running app.
 """
 
+import asyncio
 import os
 import sqlite3
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -32,7 +33,9 @@ from voa.server.auth import (
 )
 from voa.server.devices import DeviceConfig, load_devices
 from voa.server.runtime import AnchoredUtcClock, SecureIdFactory
+from voa.server.session import SessionStream
 from voa.server.settings import Settings
+from voa.server.ws import register_stream_routes, tick_loop
 from voa.storage.sqlite import SQLiteStore
 
 NotReadyCode = Literal["profile_invalid", "db_unavailable", "devices_invalid"]
@@ -66,6 +69,9 @@ class ServerRuntime:
     clock: AnchoredUtcClock
     mono_ns: Callable[[], int]
     sessions: SessionRegistry
+    streams: dict[str, SessionStream] = field(default_factory=dict)
+    connections: dict[str, WebSocket] = field(default_factory=dict)
+    tasks: list["asyncio.Task[None]"] = field(default_factory=list)
 
     @classmethod
     def build(
@@ -110,6 +116,8 @@ class ServerRuntime:
         return True
 
     def close(self) -> None:
+        for task in self.tasks:
+            task.cancel()
         if self.store is not None:
             self.store.close()
 
@@ -179,6 +187,8 @@ def create_app(
         if not caps.outputs:
             return _error(400, "no_output_capability")
 
+        profile = runtime.profile
+        assert isinstance(profile, PolicyProfile)  # guaranteed by the readiness check
         now = runtime.mono_ns()
         session, tokens = runtime.sessions.create(body.device_id, caps, now)
         if runtime.store is not None:
@@ -187,6 +197,18 @@ def create_app(
                 device_id=session.device_id,
                 started_at_utc=runtime.clock.at(now),
             )
+        stream = SessionStream.start(
+            session_id=session.session_id,
+            device_id=session.device_id,
+            inputs=frozenset(caps.inputs),
+            profile=profile,
+            ids=runtime.ids,
+            clock=runtime.clock,
+            store=runtime.store,
+            now_mono_ns=now,
+        )
+        runtime.streams[session.session_id] = stream
+        runtime.tasks.append(asyncio.create_task(tick_loop(runtime, stream)))
         created = SessionCreated.model_validate(
             {
                 "session_id": session.session_id,
@@ -208,6 +230,7 @@ def create_app(
         pair = TokenPair.model_validate(_token_pair(runtime, tokens))
         return JSONResponse(pair.model_dump(mode="json"))
 
+    register_stream_routes(app)
     return app
 
 
