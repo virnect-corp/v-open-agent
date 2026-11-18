@@ -1,6 +1,6 @@
 # ADR-0004: 시나리오 공통 인프라 - 한 프레임을 여러 모델이 분석하고, 시나리오는 근거 모델을 선언한다
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-18
 - Owners: Contract, Engine, Provider/Replay, Server
 - Related: ENG-19, CON-04, INP-05, ADM-01, OQ-01, OQ-08~11, T-R19, T-R20, UC-10, SPEC §4.2~4.4, §4.9, §9
@@ -63,7 +63,7 @@ VLM은 위험을 판정하지 않는다(Stage E의 설명 전용). 수치 주장
 - 계약 변경: Observation 검증(영상 계열은 `model` 필수), profile 스키마(`required_models`), 모델 manifest(`kind`, `labels`). JSON Schema 스냅샷과 Android 계약 리뷰가 필요하다.
 - 엔진 변경: Admission, Window, Frame Assembly 키와 필터. INV-07, INV-01/02 테스트와 TASK-11 불변식 생성기에 "같은 프레임을 두 모델이 분석, 한 모델만 정지" 경우를 추가한다(T-R19).
 - 기존 profile, fixture, mock은 `required_models`와 `mock-detector`/`mock-tracker`로 갱신한다.
-- Stage A/B Task 순서는 유지한다. 엔진 변경은 새 Task로 Stage C 진입 전에 수행한다.
+- 반영 순서: Stage A(TASK-14까지) 완료 직후 SPEC/PLAN을 갱신하고, 계약/엔진 변경을 새 Task로 수행한다. 실모델 Provider(Stage C)는 그 다음이다.
 - 되돌림: `required_models`를 선택 필드로 되돌리고 키를 `(stream_id, source_kind)`로 복원한다. 단, 그 경우 다중 모델 구성은 지원하지 않는다.
 
 ## Verification
@@ -73,7 +73,7 @@ VLM은 위험을 판정하지 않는다(Stage E의 설명 전용). 수치 주장
 - CON-03 contract suite: 실모델 Provider가 mock과 같은 suite를 통과하고 `model`을 항상 채움.
 - 첫 실제 시나리오는 정상 장면의 FP/hour를 T-R20으로 측정한 뒤에만 성능을 말한다.
 
-## SPEC/PLAN 반영 (이 ADR이 accepted 된 뒤)
+## SPEC/PLAN 반영 (Stage A 완료 직후)
 
 - SPEC §3.3: 영상 계열 `model` 필수 규칙
 - SPEC §4.2, §4.3: 키 `(stream_id, source_kind, model_id)`
