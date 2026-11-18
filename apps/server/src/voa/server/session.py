@@ -5,6 +5,7 @@ without an await in between, so ticks and observations stay time-ordered.
 """
 
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from voa.contracts.decision import RiskDecision
 from voa.contracts.messages import AdmissionMessage, AlertMessage, DecisionMessage
@@ -26,6 +27,7 @@ class SessionStream:
     ids: IdFactory
     clock: UtcClock
     store: SQLiteStore | None
+    started_at_utc: datetime
     injected_ids: tuple[str, ...] = ()
     alert_seq: int = 0
     last_alert_seq: int | None = None  # from `resume`; retransmission is TASK-20
@@ -52,6 +54,7 @@ class SessionStream:
             ids=ids,
             clock=clock,
             store=store,
+            started_at_utc=clock.at(now_mono_ns),
         )
         stream._inject_undeclared(profile, now_mono_ns)
         return stream

@@ -28,7 +28,8 @@ DEFAULTS: dict[str, str] = {
     "VOA_HEARTBEAT_MS": "1000",
     "VOA_CLIENT_WATCHDOG_MS": "3000",
     "VOA_TOKEN_TTL_S": "900",
-    "VOA_RESUME_TOKEN_TTL_S": "86400",
+    "VOA_REFRESH_TOKEN_TTL_S": "86400",
+    "VOA_SESSION_SWEEP_INTERVAL_S": "60",
     "VOA_INPUT_QUEUE_MAX": "64",
     "VOA_METADATA_RETENTION_DAYS": "7",
     "VOA_RAW_MEDIA_STORAGE": "false",
@@ -61,7 +62,8 @@ class Settings:
     heartbeat_ms: int
     client_watchdog_ms: int
     token_ttl_s: int
-    resume_token_ttl_s: int
+    refresh_token_ttl_s: int
+    session_sweep_interval_s: int
     input_queue_max: int
     metadata_retention_days: int
     raw_media_storage: bool
@@ -105,7 +107,8 @@ class Settings:
             heartbeat_ms=parse("VOA_HEARTBEAT_MS", int, 0),
             client_watchdog_ms=parse("VOA_CLIENT_WATCHDOG_MS", int, 0),
             token_ttl_s=parse("VOA_TOKEN_TTL_S", int, 0),
-            resume_token_ttl_s=parse("VOA_RESUME_TOKEN_TTL_S", int, 0),
+            refresh_token_ttl_s=parse("VOA_REFRESH_TOKEN_TTL_S", int, 0),
+            session_sweep_interval_s=parse("VOA_SESSION_SWEEP_INTERVAL_S", int, 0),
             input_queue_max=parse("VOA_INPUT_QUEUE_MAX", int, 0),
             metadata_retention_days=parse("VOA_METADATA_RETENTION_DAYS", int, 0),
             raw_media_storage=parse("VOA_RAW_MEDIA_STORAGE", _bool, True),
@@ -129,8 +132,10 @@ class Settings:
             bad.append("VOA_CLIENT_WATCHDOG_MS")
         if self.token_ttl_s <= 0:
             bad.append("VOA_TOKEN_TTL_S")
-        if self.resume_token_ttl_s < self.token_ttl_s:
-            bad.append("VOA_RESUME_TOKEN_TTL_S")
+        if self.refresh_token_ttl_s < self.token_ttl_s:
+            bad.append("VOA_REFRESH_TOKEN_TTL_S")
+        if self.session_sweep_interval_s <= 0:
+            bad.append("VOA_SESSION_SWEEP_INTERVAL_S")
         if self.input_queue_max < 1:
             bad.append("VOA_INPUT_QUEUE_MAX")
         if self.metadata_retention_days < 1:

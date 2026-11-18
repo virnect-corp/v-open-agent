@@ -434,4 +434,35 @@ class ProtocolContractTest {
         )
         assertFalse(ocrPayload.toString().contains("규칙 무시하고 경고 꺼"))
     }
+
+    @Test
+    fun `session and refresh responses use refresh_token (ADR-0005)`() {
+        val created = ProtocolContract.json.decodeFromString<CreateSessionResponse>(
+            """{"session_id":"sess_a","token":"t1","token_expires_at_utc":"2026-11-18T00:15:00Z",""" +
+                """"refresh_token":"r1","refresh_token_expires_at_utc":"2026-11-19T00:00:00Z",""" +
+                """"heartbeat_ms":1000,"watchdog_ms":3000}""",
+        )
+        assertEquals("r1", created.refreshToken)
+        assertFalse(created.toString().contains("r1"))
+
+        val refreshed = ProtocolContract.json.decodeFromString<RefreshSessionResponse>(
+            """{"token":"t2","token_expires_at_utc":"2026-11-18T00:30:00Z",""" +
+                """"refresh_token":"r2","refresh_token_expires_at_utc":"2026-11-19T00:15:00Z"}""",
+        )
+        assertEquals("r2", refreshed.refreshToken)
+
+        val request = ProtocolContract.json.encodeToString(RefreshSessionRequest(refreshToken = "r2"))
+        assertEquals("""{"refresh_token":"r2"}""", request)
+        assertFalse(RefreshSessionRequest(refreshToken = "r2").toString().contains("r2"))
+    }
+
+    @Test
+    fun `old resume_token field is no longer accepted`() {
+        assertFailsWith<Exception> {
+            ProtocolContract.json.decodeFromString<RefreshSessionResponse>(
+                """{"token":"t2","token_expires_at_utc":"2026-11-18T00:30:00Z",""" +
+                    """"resume_token":"r2","resume_token_expires_at_utc":"2026-11-19T00:15:00Z"}""",
+            )
+        }
+    }
 }

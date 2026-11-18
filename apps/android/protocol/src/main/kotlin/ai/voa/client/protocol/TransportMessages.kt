@@ -34,10 +34,10 @@ data class CreateSessionResponse(
     val token: String,
     @SerialName("token_expires_at_utc")
     val tokenExpiresAtUtc: String,
-    @SerialName("resume_token")
-    val resumeToken: String,
-    @SerialName("resume_token_expires_at_utc")
-    val resumeTokenExpiresAtUtc: String,
+    @SerialName("refresh_token")
+    val refreshToken: String,
+    @SerialName("refresh_token_expires_at_utc")
+    val refreshTokenExpiresAtUtc: String,
     @SerialName("heartbeat_ms")
     val heartbeatMs: Int,
     @SerialName("watchdog_ms")
@@ -47,8 +47,8 @@ data class CreateSessionResponse(
         ProtocolValidation.requireValidId(sessionId, "session_id")
         ProtocolValidation.requireNonBlank(token, "token")
         ProtocolValidation.requireUtcTimestamp(tokenExpiresAtUtc, "token_expires_at_utc")
-        ProtocolValidation.requireNonBlank(resumeToken, "resume_token")
-        ProtocolValidation.requireUtcTimestamp(resumeTokenExpiresAtUtc, "resume_token_expires_at_utc")
+        ProtocolValidation.requireNonBlank(refreshToken, "refresh_token")
+        ProtocolValidation.requireUtcTimestamp(refreshTokenExpiresAtUtc, "refresh_token_expires_at_utc")
         if (heartbeatMs <= 0 || watchdogMs < 2 * heartbeatMs) {
             throw ProtocolParseException(
                 errorCode = ProtocolParseException.CODE_REJECTED_SCHEMA,
@@ -58,32 +58,32 @@ data class CreateSessionResponse(
     }
 
     override fun toString(): String =
-        "CreateSessionResponse(sessionId=$sessionId, token=<redacted>, tokenExpiresAtUtc=$tokenExpiresAtUtc, resumeToken=<redacted>, resumeTokenExpiresAtUtc=$resumeTokenExpiresAtUtc, heartbeatMs=$heartbeatMs, watchdogMs=$watchdogMs)"
+        "CreateSessionResponse(sessionId=$sessionId, token=<redacted>, tokenExpiresAtUtc=$tokenExpiresAtUtc, refreshToken=<redacted>, refreshTokenExpiresAtUtc=$refreshTokenExpiresAtUtc, heartbeatMs=$heartbeatMs, watchdogMs=$watchdogMs)"
 }
 
 @Serializable
-data class ResumeSessionRequest(
-    @SerialName("resume_token")
-    val resumeToken: String,
+data class RefreshSessionRequest(
+    @SerialName("refresh_token")
+    val refreshToken: String,
 ) {
     init {
-        ProtocolValidation.requireNonBlank(resumeToken, "resume_token")
+        ProtocolValidation.requireNonBlank(refreshToken, "refresh_token")
     }
 
-    override fun toString(): String = "ResumeSessionRequest(resumeToken=<redacted>)"
+    override fun toString(): String = "RefreshSessionRequest(refreshToken=<redacted>)"
 }
 
 @Serializable
-data class ResumeSessionResponse(
+data class RefreshSessionResponse(
     @SerialName("session_id")
     val sessionId: String? = null,
     val token: String,
     @SerialName("token_expires_at_utc")
     val tokenExpiresAtUtc: String,
-    @SerialName("resume_token")
-    val resumeToken: String,
-    @SerialName("resume_token_expires_at_utc")
-    val resumeTokenExpiresAtUtc: String,
+    @SerialName("refresh_token")
+    val refreshToken: String,
+    @SerialName("refresh_token_expires_at_utc")
+    val refreshTokenExpiresAtUtc: String,
 ) {
     init {
         if (sessionId != null) {
@@ -91,12 +91,12 @@ data class ResumeSessionResponse(
         }
         ProtocolValidation.requireNonBlank(token, "token")
         ProtocolValidation.requireUtcTimestamp(tokenExpiresAtUtc, "token_expires_at_utc")
-        ProtocolValidation.requireNonBlank(resumeToken, "resume_token")
-        ProtocolValidation.requireUtcTimestamp(resumeTokenExpiresAtUtc, "resume_token_expires_at_utc")
+        ProtocolValidation.requireNonBlank(refreshToken, "refresh_token")
+        ProtocolValidation.requireUtcTimestamp(refreshTokenExpiresAtUtc, "refresh_token_expires_at_utc")
     }
 
     override fun toString(): String =
-        "ResumeSessionResponse(sessionId=$sessionId, token=<redacted>, tokenExpiresAtUtc=$tokenExpiresAtUtc, resumeToken=<redacted>, resumeTokenExpiresAtUtc=$resumeTokenExpiresAtUtc)"
+        "RefreshSessionResponse(sessionId=$sessionId, token=<redacted>, tokenExpiresAtUtc=$tokenExpiresAtUtc, refreshToken=<redacted>, refreshTokenExpiresAtUtc=$refreshTokenExpiresAtUtc)"
 }
 
 @Serializable

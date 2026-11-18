@@ -5,6 +5,7 @@ starts a server: configuration is loaded in the lifespan of the running app.
 """
 
 import asyncio
+import contextlib
 import os
 import sqlite3
 import time
@@ -25,7 +26,7 @@ from voa.engine.profile import PolicyProfile, ProfileError
 from voa.server.auth import (
     CreateSessionRequest,
     IssuedTokens,
-    ResumeRequest,
+    RefreshRequest,
     SessionCreated,
     SessionRegistry,
     TokenPair,
@@ -39,6 +40,7 @@ from voa.server.ws import register_stream_routes, tick_loop
 from voa.storage.sqlite import SQLiteStore
 
 NotReadyCode = Literal["profile_invalid", "db_unavailable", "devices_invalid"]
+RETENTION_PURGE_INTERVAL_S = 3600
 
 
 def settings_from_environment() -> Settings:
@@ -71,7 +73,8 @@ class ServerRuntime:
     sessions: SessionRegistry
     streams: dict[str, SessionStream] = field(default_factory=dict)
     connections: dict[str, WebSocket] = field(default_factory=dict)
-    tasks: list["asyncio.Task[None]"] = field(default_factory=list)
+    tick_tasks: dict[str, "asyncio.Task[None]"] = field(default_factory=dict)
+    background: list["asyncio.Task[None]"] = field(default_factory=list)
 
     @classmethod
     def build(
@@ -92,7 +95,7 @@ class ServerRuntime:
             sessions=SessionRegistry(
                 ids,
                 token_ttl_s=settings.token_ttl_s,
-                resume_ttl_s=settings.resume_token_ttl_s,
+                refresh_ttl_s=settings.refresh_token_ttl_s,
             ),
         )
 
@@ -115,11 +118,53 @@ class ServerRuntime:
             return False
         return True
 
+    def end_session(self, session_id: str, now_mono_ns: int) -> None:
+        """Stop the tick loop, forget engine and token digests, record ended_at_utc."""
+        task = self.tick_tasks.pop(session_id, None)
+        if task is not None:
+            task.cancel()
+        stream = self.streams.pop(session_id, None)
+        self.sessions.remove(session_id)
+        if stream is not None and self.store is not None:
+            self.store.save_session(
+                session_id=session_id,
+                device_id=stream.device_id,
+                started_at_utc=stream.started_at_utc,
+                ended_at_utc=self.clock.at(now_mono_ns),
+            )
+
+    def sweep_sessions(self, now_mono_ns: int) -> list[str]:
+        """ADR-0005: end sessions that are disconnected and can no longer be refreshed."""
+        ended = [
+            session_id
+            for session_id in self.sessions.refresh_expired(now_mono_ns)
+            if session_id not in self.connections
+        ]
+        for session_id in ended:
+            self.end_session(session_id, now_mono_ns)
+        return ended
+
+    def purge_metadata(self) -> None:
+        """SPEC 8.1: delete rows older than VOA_METADATA_RETENTION_DAYS."""
+        if self.store is None:
+            return
+        with contextlib.suppress(sqlite3.Error):
+            self.store.purge_expired(
+                now_utc=self.clock.at(self.mono_ns()),
+                retention_days=self.settings.metadata_retention_days,
+            )
+
     def close(self) -> None:
-        for task in self.tasks:
+        for task in [*self.tick_tasks.values(), *self.background]:
             task.cancel()
         if self.store is not None:
             self.store.close()
+
+
+async def _every(interval_s: float, action: Callable[[], object]) -> None:
+    while True:
+        await asyncio.sleep(interval_s)
+        action()
 
 
 def _error(status_code: int, code: str) -> JSONResponse:
@@ -131,8 +176,8 @@ def _token_pair(runtime: ServerRuntime, tokens: IssuedTokens) -> dict[str, objec
     return {
         "token": tokens.token,
         "token_expires_at_utc": runtime.clock.at(tokens.token_expires_mono_ns),
-        "resume_token": tokens.resume_token,
-        "resume_token_expires_at_utc": runtime.clock.at(tokens.resume_expires_mono_ns),
+        "refresh_token": tokens.refresh_token,
+        "refresh_token_expires_at_utc": runtime.clock.at(tokens.refresh_expires_mono_ns),
     }
 
 
@@ -145,6 +190,16 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         runtime = ServerRuntime.build(load_settings(), mono_ns)
         app.state.runtime = runtime
+        runtime.purge_metadata()  # at start, then hourly (SPEC 8.1)
+        runtime.background += [
+            asyncio.create_task(_every(RETENTION_PURGE_INTERVAL_S, runtime.purge_metadata)),
+            asyncio.create_task(
+                _every(
+                    runtime.settings.session_sweep_interval_s,
+                    lambda: runtime.sweep_sessions(runtime.mono_ns()),
+                )
+            ),
+        ]
         try:
             yield
         finally:
@@ -208,7 +263,7 @@ def create_app(
             now_mono_ns=now,
         )
         runtime.streams[session.session_id] = stream
-        runtime.tasks.append(asyncio.create_task(tick_loop(runtime, stream)))
+        runtime.tick_tasks[session.session_id] = asyncio.create_task(tick_loop(runtime, stream))
         created = SessionCreated.model_validate(
             {
                 "session_id": session.session_id,
@@ -219,12 +274,12 @@ def create_app(
         )
         return JSONResponse(created.model_dump(mode="json"))
 
-    @app.post("/v1/sessions/{session_id}/resume")
-    async def resume_session(
-        request: Request, session_id: str, body: ResumeRequest
+    @app.post("/v1/sessions/{session_id}/refresh")
+    async def refresh_session(
+        request: Request, session_id: str, body: RefreshRequest
     ) -> JSONResponse:
         runtime: ServerRuntime = request.app.state.runtime
-        tokens = runtime.sessions.resume(session_id, body.resume_token, runtime.mono_ns())
+        tokens = runtime.sessions.refresh(session_id, body.refresh_token, runtime.mono_ns())
         if tokens is None:
             return _error(401, "unauthorized")
         pair = TokenPair.model_validate(_token_pair(runtime, tokens))
