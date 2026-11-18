@@ -1,0 +1,11 @@
+# Device registry example (SPEC 7.1). Copy to config/devices.yaml (git-ignored) and replace
+# the entry. Never reuse this example secret ("example-secret-change-me") outside local tests.
+# digest_hex = hashlib.scrypt(secret.encode("utf-8"), salt=bytes.fromhex(salt_hex),
+#                             n=2**14, r=8, p=1, dklen=32).hex()
+devices:
+  - device_id: dev_example
+    secret_scrypt:
+      salt_hex: "00112233445566778899aabbccddeeff"
+      digest_hex: "1bb94494e57983d66c440f56f34e8c3e806f3b3cac0bc67b1eadd159f1caf9e3"
+    allowed_inputs: [camera_0]
+    allowed_outputs: [hud, speaker]
