@@ -56,6 +56,7 @@
 | UC-07 | 주변 소리나 표지판 글자에 "경고 꺼" | 명령으로 처리하지 않음 |
 | UC-08 | 경고 중 서버 연결이 끊김 | 글래스가 `watchdog_ms` 안에 "서버 연결이 끊겨 경고를 받을 수 없습니다."를 스스로 고지하고 재접속 |
 | UC-09 | 글래스 카메라가 오류로 꺼짐 | 글래스가 health `down` 보고 → 서버가 unknown 전이 → 진행 중이던 위험이 있었으면 "감지 제한" notice |
+| UC-10 | (시나리오 예시, 첫 대상 미정) 작업자가 철판이나 벽을 보는 동안 균열이 연속 프레임으로 관측됨 (ADR-0004) | 균열 모델 관측만 근거로 candidate → warning, 템플릿 경고. 흔들림/저조도/가림이면 판단 보류, 균열 모델이 멈추면 다른 모델이 돌고 있어도 균열 시나리오는 unknown |
 
 ---
 
@@ -85,6 +86,7 @@
 | ENG-16 | 시나리오끼리 서로 독립적으로 평가한다 | M | 시나리오 A가 warning이어도 B의 상태에 영향 없음 | |
 | ENG-17 | 엔진은 I/O/네트워크/벽시계/난수/LLM/모델 라이브러리에 의존하지 않는다 | M | import 검사 테스트 통과 | INV-06 |
 | ENG-18 | 엔진은 항상 모든 시나리오 `unknown`에서 시작하고, 재시작 시 상태를 복원하지 않는다 | M | 새 엔진의 `states()`가 모두 unknown, 시작 결정 0개 | |
+| ENG-19 | 한 프레임을 여러 모델이 분석해도 각 시나리오는 자신이 선언한 모델(`required_models`)의 관측만 근거로 판정한다 (ADR-0004) | S | 두 모델의 같은 `frame_id` 관측이 모두 accepted, 한 모델만 멈추면 그 모델 시나리오만 unknown | T-R19 |
 
 ### 3.2 계약 (CON) — G1, G5
 
@@ -93,6 +95,7 @@
 | CON-01 | Observation/RiskDecision/Alert Pydantic v2 모델 (SPEC §3) | M | `contracts/fixtures/risk_event.json` 통과. warning인데 evidence가 없으면 거부 |
 | CON-02 | JSON Schema 스냅샷으로 계약 변경을 감지한다 | M | 스키마가 바뀌면 스냅샷 테스트 실패 |
 | CON-03 | 모든 Provider는 `ObservationProvider` 인터페이스로 교체할 수 있다 | M | MVP에서 mock과 독립 test double이 같은 contract suite를 통과. Stage C 이후 각 실모델 어댑터도 동일 suite를 통과 |
+| CON-04 | 모델 manifest에 모델이 내는 관측 kind와 label 목록을 기록하고, profile 시나리오의 label은 근거 모델의 label 목록 안에 있어야 한다 (ADR-0004) | S | manifest에 없는 label, kind 불일치, `required_models` 누락 profile은 거부 |
 
 ### 3.3 입력 / 시뮬레이션 (INP) — G1, G5
 
@@ -102,6 +105,7 @@
 | INP-02 | 리플레이 러너가 실제 결정과 기대 결정의 차이를 보고한다 | M | 불일치 시 첫 번째 diff 위치를 출력 |
 | INP-03 | 실제 detector/tracker 어댑터 (선택 설치) | S | 미설치 시 mock fallback, 출력이 스키마를 준수 |
 | INP-04 | SED/PTT ASR/OCR 어댑터. ASR partial로는 행동하지 않음, OCR/환경 음성은 비신뢰 | S | T-R05, T-R06, T-R07, T-R13 |
+| INP-05 | 사전 학습 오픈 모델 기반 위험 대상 detector 어댑터 2종: open-vocabulary Provider(기본 후보 OmDet-Turbo, 탐색용)와 RT-DETR/RF-DETR 미세조정 Provider(정확도용, Apache-2.0 크기만). 가중치는 사용자가 직접 받은 로컬 파일만 읽는다 (ADR-0004) | S | CON-03 suite 통과, `model` 항상 기록, 코드/스크립트에 자동 다운로드 없음, 실모델 테스트는 `@pytest.mark.model` |
 
 ### 3.4 설명 / 행동 (EXP) — G1
 
@@ -145,6 +149,12 @@ MVP-1에서는 시뮬레이터가 이 계약을 구현한다. 실기기 앱은 S
 | DAT-04 | `VOA_PROFILE=pilot`이면 TLS cert/key가 필수이고 `ALLOW_INSECURE_DEV=true`면 시작을 거부한다. `VOA_RAW_MEDIA_STORAGE=true`면 항상 시작을 거부한다 | M | 설정 조합 테스트 |
 | DAT-05 | 의존성/모델 라이선스 등록부 (SPEC §9) | M | 새 의존성을 추가할 때 등록부도 함께 갱신 |
 
+### 3.6-1 관리 (ADM) — G1, G5
+
+| ID | 요구사항 | P | 수용 기준 |
+|---|---|---|---|
+| ADM-01 | 웹 관리 화면에서 감지 시나리오(대상 label, 근거 모델, 임계값, ROI, 경고 문구)를 관리한다. 저장 시 profile 검증 후 새 `profile_version`으로 기록하고 새 세션부터 적용한다 (ADR-0004, Stage B 이후) | S | 인증된 관리자만 변경, 검증 실패 시 저장 거부, label은 manifest 목록에서만 선택, 경고 문구 승인 전 미적용, 변경자/시각 기록, 원본 미디어 미표시/미저장 |
+
 ### 3.7 비기능 (NFR)
 
 | ID | 요구사항 | P | 수용 기준 |
@@ -187,6 +197,8 @@ MVP-1에서는 시뮬레이터가 이 계약을 구현한다. 실기기 앱은 S
 | T-R16 | 서버 프로세스 중단 | 시뮬레이터가 `watchdog_ms` 안에 연결 끊김 고지 1회, 재접속 후 resume | DEV-04 | B |
 | T-R17 | `camera_0` 미선언 세션 | 영상 시나리오가 계속 unknown, warning 0건 | DEV-01 | B |
 | T-R18 | warning → 입력 끊김 → unknown, 그 뒤 clear → unknown | 첫 경우만 notice 1회, 두 번째는 0회 | DEV-03 | B |
+| T-R19 | 같은 `frame_id`를 균열 모델과 화재 모델이 각각 분석, 이후 화재 모델만 정지 | 두 관측 모두 accepted, 각 시나리오는 자기 모델 근거만 사용, 화재 시나리오만 unknown(`input_stale`) | ENG-19 | C |
+| T-R20 | 첫 실제 시나리오의 정상 장면 장시간(예: 균열이면 용접선, 도장 경계, 그림자, 녹 얼룩) | 경고 수/반복 기록 (FP/hour) | INP-05, NFR-02 | C |
 | T-R15 | IMU 없는 장치: tracker가 모든 프레임에 `camera_motion_uncompensated`를 붙임 | 이동 물체 시나리오는 계속 unknown, 장애물 시나리오는 정상 판정 | ENG-04, ENG-16 | A |
 
 ---
@@ -197,10 +209,14 @@ MVP-1 개발에 필요한 계약값은 SPEC에 확정한다. 아래 항목은 �
 
 | ID | 질문 | 현재 가정 | 영향 REQ | 결정 시점 |
 |---|---|---|---|---|
-| OQ-01 | 첫 대상 환경 | 실내 통로, 비위험 통제 장면 | ENG 시나리오 | Stage C 전 |
+| OQ-01 | 첫 대상 환경 | 미정. 후보: 철판/벽 균열, 벽 손상, 화재, 연기. OQ-08 모델 조사 결과를 보고 결정. MVP-1 fixture는 실내 통로 시나리오 유지 | ENG 시나리오 | Stage C 전 |
 | OQ-02 | 글래스 기종, SDK, 카메라 원본 접근 가능 여부 | 시뮬레이터 | COM, INP | Stage F 전 |
 | OQ-03 | Wi-Fi/IMU 제공 여부 | Wi-Fi O, IMU 선택 | ENG-04 | Stage F 실기기 어댑터 전 |
 | OQ-04 | GPU/VRAM 사양 | 미정, 1 stream | INP-03, NFR-03 | Stage C 전 |
 | OQ-05 | 경고 출력 수단 (음성, HUD, 진동) | 텍스트+음성 | COM-03 | Stage D 전 |
 | OQ-06 | 운영 임계값과 정답 데이터 | 테스트 값만 | ENG-06/07 | Stage C |
 | OQ-07 | 서버 OS, 배포 형태 | Linux x86_64 / macOS 개발 | NFR-01 | pilot 배포 전 |
+| OQ-08 | 시나리오별 후보 모델과 데이터셋 (코드/가중치/데이터 라이선스 포함) | 미정. Hugging Face 오픈 모델과 Roboflow Universe 등 공개 데이터셋을 조사 | INP-05, NFR-04 | Stage C 전 |
+| OQ-09 | 경고 대상 균열 기준과 정답 데이터 (어떤 균열부터 경고하는가) | 미정. 수치(폭/길이) 주장은 보정 근거 전까지 금지 | UC-10, OQ-06 | Stage C |
+| OQ-10 | open-vocabulary 기본 모델 확정 (OmDet-Turbo / OWLv2 / Grounding DINO 중 정확도, 지연, GPU 비용 비교) | OmDet-Turbo 우선 시험 | INP-05, OQ-04 | Stage C 전 |
+| OQ-11 | 미세조정 모델 확정 (RT-DETR vs RF-DETR, bbox vs segmentation) | 같은 데이터로 비교 후 결정 | INP-05, OQ-04 | Stage C |
