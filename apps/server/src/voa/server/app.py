@@ -6,18 +6,30 @@ starts a server: configuration is loaded in the lifespan of the running app.
 
 import os
 import sqlite3
+import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from voa.config.model_registry import check_profile_models, load_manifests
 from voa.config.profile_loader import load_profile
 from voa.engine.profile import PolicyProfile, ProfileError
+from voa.server.auth import (
+    CreateSessionRequest,
+    IssuedTokens,
+    ResumeRequest,
+    SessionCreated,
+    SessionRegistry,
+    TokenPair,
+    authenticate_device,
+)
 from voa.server.devices import DeviceConfig, load_devices
 from voa.server.runtime import AnchoredUtcClock, SecureIdFactory
 from voa.server.settings import Settings
@@ -52,9 +64,13 @@ class ServerRuntime:
     devices: dict[str, DeviceConfig] | None
     ids: SecureIdFactory
     clock: AnchoredUtcClock
+    mono_ns: Callable[[], int]
+    sessions: SessionRegistry
 
     @classmethod
-    def build(cls, settings: Settings) -> "ServerRuntime":
+    def build(
+        cls, settings: Settings, mono_ns: Callable[[], int] = time.monotonic_ns
+    ) -> "ServerRuntime":
         try:
             store: SQLiteStore | None = SQLiteStore(settings.db_path)
         except (sqlite3.Error, OSError):
@@ -64,8 +80,14 @@ class ServerRuntime:
             profile=load_policy(settings),
             store=store,
             devices=load_devices(settings.devices_file),
-            ids=SecureIdFactory(),
-            clock=AnchoredUtcClock.now(),
+            ids=(ids := SecureIdFactory()),
+            clock=AnchoredUtcClock(datetime.now(UTC), mono_ns()),
+            mono_ns=mono_ns,
+            sessions=SessionRegistry(
+                ids,
+                token_ttl_s=settings.token_ttl_s,
+                resume_ttl_s=settings.resume_token_ttl_s,
+            ),
         )
 
     def not_ready_code(self) -> NotReadyCode | None:
@@ -92,10 +114,28 @@ class ServerRuntime:
             self.store.close()
 
 
-def create_app(load_settings: Callable[[], Settings] = settings_from_environment) -> FastAPI:
+def _error(status_code: int, code: str) -> JSONResponse:
+    """REST error body is `{"code": ...}` only; request contents are never echoed."""
+    return JSONResponse({"code": code}, status_code=status_code)
+
+
+def _token_pair(runtime: ServerRuntime, tokens: IssuedTokens) -> dict[str, object]:
+    return {
+        "token": tokens.token,
+        "token_expires_at_utc": runtime.clock.at(tokens.token_expires_mono_ns),
+        "resume_token": tokens.resume_token,
+        "resume_token_expires_at_utc": runtime.clock.at(tokens.resume_expires_mono_ns),
+    }
+
+
+def create_app(
+    load_settings: Callable[[], Settings] = settings_from_environment,
+    *,
+    mono_ns: Callable[[], int] = time.monotonic_ns,
+) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        runtime = ServerRuntime.build(load_settings())
+        runtime = ServerRuntime.build(load_settings(), mono_ns)
         app.state.runtime = runtime
         try:
             yield
@@ -116,6 +156,57 @@ def create_app(load_settings: Callable[[], Settings] = settings_from_environment
         if code is None:
             return JSONResponse({"status": "ready"})
         return JSONResponse({"status": "not_ready", "error_code": code}, status_code=503)
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(request: Request, error: RequestValidationError) -> JSONResponse:
+        # FastAPI's default 422 echoes the input, which may contain a secret.
+        return _error(400, "invalid_request")
+
+    @app.post("/v1/sessions")
+    async def create_session(request: Request, body: CreateSessionRequest) -> JSONResponse:
+        runtime: ServerRuntime = request.app.state.runtime
+        if runtime.not_ready_code() is not None:
+            return _error(503, "not_ready")
+        allowed = authenticate_device(
+            body, runtime.devices, allow_insecure_dev=runtime.settings.allow_insecure_dev
+        )
+        if allowed is None:
+            return _error(401, "unauthorized")
+        inputs, outputs = allowed
+        caps = body.capabilities
+        if not set(caps.inputs) <= inputs or not set(caps.outputs) <= outputs:
+            return _error(400, "capability_not_allowed")
+        if not caps.outputs:
+            return _error(400, "no_output_capability")
+
+        now = runtime.mono_ns()
+        session, tokens = runtime.sessions.create(body.device_id, caps, now)
+        if runtime.store is not None:
+            runtime.store.save_session(
+                session_id=session.session_id,
+                device_id=session.device_id,
+                started_at_utc=runtime.clock.at(now),
+            )
+        created = SessionCreated.model_validate(
+            {
+                "session_id": session.session_id,
+                **_token_pair(runtime, tokens),
+                "heartbeat_ms": runtime.settings.heartbeat_ms,
+                "watchdog_ms": runtime.settings.client_watchdog_ms,
+            }
+        )
+        return JSONResponse(created.model_dump(mode="json"))
+
+    @app.post("/v1/sessions/{session_id}/resume")
+    async def resume_session(
+        request: Request, session_id: str, body: ResumeRequest
+    ) -> JSONResponse:
+        runtime: ServerRuntime = request.app.state.runtime
+        tokens = runtime.sessions.resume(session_id, body.resume_token, runtime.mono_ns())
+        if tokens is None:
+            return _error(401, "unauthorized")
+        pair = TokenPair.model_validate(_token_pair(runtime, tokens))
+        return JSONResponse(pair.model_dump(mode="json"))
 
     return app
 
