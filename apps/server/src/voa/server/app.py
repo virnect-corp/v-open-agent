@@ -24,6 +24,7 @@ from voa.config.model_registry import check_profile_models, load_manifests
 from voa.config.profile_loader import load_profile
 from voa.engine.profile import PolicyProfile, ProfileError
 from voa.server.auth import (
+    AckRequest,
     CreateSessionRequest,
     IssuedTokens,
     RefreshRequest,
@@ -284,6 +285,24 @@ def create_app(
             return _error(401, "unauthorized")
         pair = TokenPair.model_validate(_token_pair(runtime, tokens))
         return JSONResponse(pair.model_dump(mode="json"))
+
+    @app.post("/v1/alerts/{alert_id}/ack")
+    async def ack_alert(request: Request, alert_id: str, body: AckRequest) -> JSONResponse:
+        runtime: ServerRuntime = request.app.state.runtime
+        header = request.headers.get("authorization", "")
+        scheme, _, token = header.partition(" ")
+        now = runtime.mono_ns()
+        session_id = (
+            runtime.sessions.session_for_access(token, now) if scheme.lower() == "bearer" else None
+        )
+        if session_id is None:
+            return _error(401, "unauthorized")
+        stream = runtime.streams.get(session_id)
+        if stream is None or alert_id not in stream.dispatcher.records:
+            return _error(404, "not_found")  # another session's alert looks the same
+        stream.ack(alert_id, body.status, now)
+        state = stream.dispatcher.records[alert_id].state
+        return JSONResponse({"alert_id": alert_id, "delivery_state": state})
 
     register_stream_routes(app)
     return app

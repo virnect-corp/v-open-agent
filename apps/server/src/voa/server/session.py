@@ -8,14 +8,20 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from voa.contracts.decision import RiskDecision
-from voa.contracts.messages import AdmissionMessage, AlertMessage, DecisionMessage
+from voa.contracts.messages import (
+    AdmissionMessage,
+    AlertMessage,
+    DecisionMessage,
+    NoticeMessage,
+)
 from voa.contracts.observation import HealthPayload, Observation, ObservationDraft
 from voa.engine.engine import DecisionEngine
 from voa.engine.ports import IdFactory, UtcClock
 from voa.engine.profile import PolicyProfile
+from voa.server.dispatch import AckOutcome, AckStatus, AlertDispatcher, AlertRecord, NoticeTracker
 from voa.storage.sqlite import SQLiteStore
 
-PushMessage = DecisionMessage | AlertMessage | AdmissionMessage
+PushMessage = DecisionMessage | AlertMessage | AdmissionMessage | NoticeMessage
 
 
 @dataclass
@@ -28,6 +34,10 @@ class SessionStream:
     clock: UtcClock
     store: SQLiteStore | None
     started_at_utc: datetime
+    warning_ttl_ms: int
+    degraded_notice_text: str
+    dispatcher: AlertDispatcher = field(default_factory=AlertDispatcher)
+    notices: NoticeTracker = field(default_factory=NoticeTracker)
     injected_ids: tuple[str, ...] = ()
     alert_seq: int = 0
     last_alert_seq: int | None = None  # from `resume`; retransmission is TASK-20
@@ -55,6 +65,8 @@ class SessionStream:
             clock=clock,
             store=store,
             started_at_utc=clock.at(now_mono_ns),
+            warning_ttl_ms=profile.params.warning_ttl_ms,
+            degraded_notice_text=profile.degraded_notice_text,
         )
         stream._inject_undeclared(profile, now_mono_ns)
         return stream
@@ -94,11 +106,37 @@ class SessionStream:
                     status=result.admission,
                 )
             )
-        messages += self._decisions(result.decisions)
+        messages += self._decisions(result.decisions, now_mono_ns)
         return messages
 
     def tick(self, now_mono_ns: int) -> list[PushMessage]:
-        return self._decisions(self.engine.tick(now_mono_ns))
+        messages = self._decisions(self.engine.tick(now_mono_ns), now_mono_ns)
+        for record in self.dispatcher.expire(now_mono_ns):
+            self._persist_alert(record, now_mono_ns)
+        return messages
+
+    def mark_sent(self, alert_id: str, now_mono_ns: int) -> None:
+        """Called after the alert message was actually written to the socket."""
+        if self.dispatcher.mark_sent(alert_id):
+            self._persist_alert(self.dispatcher.records[alert_id], now_mono_ns)
+
+    def ack(self, alert_id: str, status: AckStatus, now_mono_ns: int) -> AckOutcome:
+        outcome = self.dispatcher.ack(alert_id, status)
+        if outcome.changed:
+            self._persist_alert(self.dispatcher.records[alert_id], now_mono_ns)
+        return outcome
+
+    def _persist_alert(self, record: AlertRecord, now_mono_ns: int) -> None:
+        if self.store is None:
+            return
+        self.store.save_alert(
+            record.alert.model_copy(update={"delivery_state": record.state}),
+            session_id=self.session_id,
+            risk_event_id=record.risk_event_id,
+            scenario_id=record.scenario_id,
+            alert_seq=record.alert_seq,
+            updated_at_utc=self.clock.at(now_mono_ns),
+        )
 
     def _observation(self, draft: ObservationDraft, now_mono_ns: int) -> Observation:
         return Observation.from_draft(
@@ -110,14 +148,27 @@ class SessionStream:
             received_at_utc=self.clock.at(now_mono_ns),
         )
 
-    def _decisions(self, decisions: list[RiskDecision]) -> list[PushMessage]:
+    def _decisions(self, decisions: list[RiskDecision], now_mono_ns: int) -> list[PushMessage]:
         messages: list[PushMessage] = []
         for decision in decisions:
             if self.store is not None:
                 self.store.save_decision(decision)
             messages.append(DecisionMessage(decision=decision))
+            if self.notices.should_notify(decision):
+                messages.append(
+                    NoticeMessage(
+                        notice_id=self.ids.new("notice"),
+                        kind="degraded",
+                        scenario_id=decision.scenario_id,
+                        text=self.degraded_notice_text,
+                    )
+                )
             if decision.alert is not None:
                 self.alert_seq += 1
+                record = self.dispatcher.queue(
+                    decision, self.alert_seq, now_mono_ns=now_mono_ns, ttl_ms=self.warning_ttl_ms
+                )
+                self._persist_alert(record, now_mono_ns)
                 messages.append(
                     AlertMessage(
                         alert_seq=self.alert_seq,

@@ -593,6 +593,9 @@ devices:
   ① 현재 해당 시나리오 상태가 `warning` ② 그 alert가 현재 episode의 마지막 alert ③ `valid_until_utc`가 아직 지나지 않음
   나머지는 보내지 않는다.
 - **중복 ACK**: 같은 `alert_id`와 같은 status의 ACK가 다시 오면 무시한다(멱등). 정상 상태 순서는 `queued < sent < received < played`이고 역행하지 않는다. `unknown_delivery`나 `expired`에서 늦은 `received` 또는 `played` ACK가 오면 해당 ACK 상태로 변경하고 허용 로그 키로 `event="late_ack"`, `alert_id`, `status`를 기록한다. `received`에서 늦은 `played`는 `played`로 올린다. `played`에서 다른 ACK는 무시한다.
+- **ACK 경로**: WebSocket `ack` 또는 REST `POST /v1/alerts/{alert_id}/ack {"status": "received"|"played"}`(Bearer access token). REST 성공은 200 `{"alert_id", "delivery_state"}`, token이 없거나 무효면 401 `unauthorized`, 다른 세션의 alert이거나 없는 alert면 404 `not_found`다. WebSocket으로 없는 `alert_id`의 ACK가 오면 응답 없이 무시한다.
+- `sent`는 alert 메시지를 실제로 socket에 쓴 뒤에 기록한다. 연결이 없어 보내지 못한 alert는 `queued`로 남는다. 상태가 바뀔 때마다 `alerts` 테이블에 기록한다.
+- `notice`는 연결이 없으면 보내지 않고 저장하지 않는다(재전송 대상은 alert뿐이다).
 - 장치에 실제로 재생할지는 장치가 `alert_id`로 판단한다. 같은 `alert_id`는 한 번만 재생하는 것이 장치 측 계약이고, 시뮬레이터가 이를 구현해 테스트한다.
 
 ### 7.4 글래스 클라이언트 입/출력 계약
