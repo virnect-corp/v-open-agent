@@ -47,10 +47,10 @@ Android 구현은 아래 항목이 서버 계약에 반영된 뒤 시작한다.
 
 - 계약 상태: `02-technical-specification.md` §7.1에 확정
 - `secret_scrypt`는 16바이트 salt와 32바이트 digest를 분리 저장
-- access token은 메모리에만 유지하고 resume token은 Android Keystore key로 보호한 앱 전용 저장소에 보관
-- access token 만료 또는 프로세스 재시작 후는 REST resume endpoint로 token을 회전한 뒤 WebSocket `auth`를 수행
+- access token은 메모리에만 유지하고 refresh token은 Android Keystore key로 보호한 앱 전용 저장소에 보관
+- access token 만료 또는 프로세스 재시작 후는 REST refresh endpoint(`/v1/sessions/{id}/refresh`)로 token을 회전한 뒤 WebSocket `auth`를 수행
 - 서버 재시작으로 resume가 401이면 장치 credential로 새 세션 생성
-- 재생 완료 `alert_id` 보존 범위는 현재 세션과 resume token 만료 시각까지로 제한
+- 재생 완료 `alert_id` 보존 범위는 현재 세션과 refresh token 만료 시각까지로 제한
 
 ### GATE-B: 메시지 JSON Schema
 
@@ -114,10 +114,10 @@ STOPPED
 ### 6.1 `SessionApi`
 
 - `POST /v1/sessions` 요청
-- `POST /v1/sessions/{session_id}/resume` token 회전 요청
+- `POST /v1/sessions/{session_id}/refresh` token 회전 요청 (ADR-0005)
 - 입력과 출력 capability 선언
 - 401, `capability_not_allowed`, `no_output_capability` 구분
-- access token은 메모리에만 유지하고 resume token은 Keystore key로 보호
+- access token은 메모리에만 유지하고 refresh token은 Keystore key로 보호
 
 ### 6.2 `StreamClient`
 
@@ -160,7 +160,7 @@ STOPPED
 ## 7. 보안과 프라이버시
 
 - 장치 credential은 Android Keystore의 비출력 key로 암호화한 앱 전용 저장소에 보관한다.
-- access token, secret, resume token, 관측 payload, alert text를 로그에 남기지 않는다.
+- access token, secret, refresh token, 관측 payload, alert text를 로그에 남기지 않는다.
 - debug 앱의 cleartext 허용은 에뮬레이터 호스트와 개발 바인드에만 제한한다. pilot 빌드는 TLS 실패 시 연결하지 않는다.
 - 원본 미디어는 메모리 큐를 넘어 파일, cache, 백업, crash attachment로 남지 않는다.
 - crash report는 기본 OFF로 두고, 외부 서비스를 자동 추가하지 않는다.

@@ -119,7 +119,7 @@
 
 | ID | 요구사항 | P | 수용 기준 |
 |---|---|---|---|
-| COM-01 | 장치 자격증명으로 세션을 만들고, 인증되지 않은 연결이나 만료된 token은 거부하며 resume token은 사용 시 회전한다 | M | 무인증/만료 → 401/close 4401, resume 성공 후 이전 token 재사용 → 401 |
+| COM-01 | 장치 자격증명으로 세션을 만들고, 인증되지 않은 연결이나 만료된 token은 거부하며 refresh token은 사용 시 회전한다. 연결이 없고 refresh token이 만료된 세션은 정리한다 (ADR-0005) | M | 무인증/만료 → 401/close 4401, refresh 성공 후 이전 token 재사용 → 401, 정리된 세션의 refresh/auth → 401/4401 |
 | COM-02 | WS로 관측을 받아 엔진에 넣고 결정/alert를 push한다. 주기적 tick을 실행한다 | M | 시뮬레이터 E2E로 warning alert를 수신 |
 | COM-03 | ACK의 `received`와 `played`를 구분한다. 기한에 `sent` 이후 ACK가 없으면 `unknown_delivery`이고 `received`는 `played`로 오인하지 않는다 | M | T-R11 |
 | COM-04 | 같은 alert는 한 번만 전달하고, 재접속 시 현재 상태로 다시 확인한 뒤 유효한 alert만 보낸다 | M | T-R10, UC-05 |

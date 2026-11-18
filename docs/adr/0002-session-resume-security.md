@@ -1,6 +1,6 @@
 # ADR-0002: Resume token은 REST에서 회전하고 WebSocket은 access token으로 인증한다
 
-- Status: accepted
+- Status: accepted (token 명칭과 endpoint는 ADR-0005에서 refresh token, `/refresh`로 변경)
 - Date: 2026-11-09
 - Owners: Server, Android
 - Related: COM-01, COM-04, DEV-04, TASK-17, TASK-20, AND-02, AND-03

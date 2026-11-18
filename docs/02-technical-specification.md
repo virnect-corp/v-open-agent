@@ -541,17 +541,19 @@ devices:
     allowed_outputs: [hud, speaker]
 ```
 - `salt_hex`는 16바이트, `digest_hex`는 32바이트다. 검증값은 `hashlib.scrypt(secret.encode("utf-8"), salt=bytes.fromhex(salt_hex), n=2**14, r=8, p=1, dklen=32)`로 계산하고 `hmac.compare_digest`로 비교한다. 파라미터는 파일에서 바꾸지 않는다.
-- `POST /v1/sessions {device_id, secret, capabilities: {inputs: [...], outputs: [...]}}` → `{session_id, token, token_expires_at_utc, resume_token, resume_token_expires_at_utc, heartbeat_ms, watchdog_ms}`
-  - token과 resume token은 각각 `secrets.token_urlsafe(32)`로 만든다. 서버는 각 token의 SHA-256 digest만 메모리에 보관하고 검증 시 `hmac.compare_digest`를 사용한다. 평문, secret, digest를 DB와 로그에 남기지 않는다.
-  - access token TTL은 `VOA_TOKEN_TTL_S`, resume token TTL은 `VOA_RESUME_TOKEN_TTL_S`다. access token은 WebSocket handshake 시점에 검증하며 이미 인증된 WebSocket은 token 만료로 즉시 종료하지 않는다.
-  - `POST /v1/sessions/{session_id}/resume {resume_token}`은 세션이 서버 메모리에 있고 resume token이 유효할 때 새 access token과 resume token, 두 만료 시각을 반환한다. 성공 시 이전 token 둘을 즉시 폐기하는 일회성 회전이다.
-  - 서버 프로세스가 재시작하면 token과 세션 엔진을 복원하지 않는다. resume 요청은 401이고 클라이언트는 장치 credential로 새 세션을 만든다.
+- `POST /v1/sessions {device_id, secret, capabilities: {inputs: [...], outputs: [...]}}` → `{session_id, token, token_expires_at_utc, refresh_token, refresh_token_expires_at_utc, heartbeat_ms, watchdog_ms}`
+  - token과 refresh token은 각각 `secrets.token_urlsafe(32)`로 만든다. 서버는 각 token의 SHA-256 digest만 메모리에 보관하고 검증 시 `hmac.compare_digest`를 사용한다. 평문, secret, digest를 DB와 로그에 남기지 않는다.
+  - access token TTL은 `VOA_TOKEN_TTL_S`, refresh token TTL은 `VOA_REFRESH_TOKEN_TTL_S`다. access token은 WebSocket handshake 시점에 검증하며 이미 인증된 WebSocket은 token 만료로 즉시 종료하지 않는다.
+  - `POST /v1/sessions/{session_id}/refresh {refresh_token}`은 세션이 서버 메모리에 있고 refresh token이 유효할 때 `{token, token_expires_at_utc, refresh_token, refresh_token_expires_at_utc}`를 반환한다. 성공 시 이전 token 둘을 즉시 폐기하는 일회성 회전이고, 새 refresh token의 만료 시각은 이 시점부터 다시 계산한다(ADR-0005).
+  - REST `refresh`(token 회전)와 WebSocket `resume(last_alert_seq)`(경고 스트림 이어 받기)는 다른 동작이다. 재접속 순서는 `refresh` → WebSocket `auth` → `resume`이다.
+  - 서버 프로세스가 재시작하면 token과 세션 엔진을 복원하지 않는다. refresh 요청은 401이고 클라이언트는 장치 credential로 새 세션을 만든다.
   - 인증에 실패하면 401이고, 응답 본문에 원인을 구분하지 않는다.
   - 인증은 통과했지만 `capabilities`가 등록된 `allowed_*`를 벗어나면 400 `capability_not_allowed`다.
   - `outputs`가 비어 있으면 400 `no_output_capability`다. 경고를 출력할 수 없는 장치에는 세션을 열지 않는다.
+  - **세션 정리 (ADR-0005)**: WebSocket 연결이 없고 refresh token이 만료된 세션은 정리한다. tick 루프를 멈추고 엔진과 token digest를 메모리에서 지우며 `sessions.ended_at_utc`를 기록한다. 정리된 세션의 refresh와 WebSocket `auth`는 401/4401이다. 연결 중인 세션은 refresh token이 만료돼도 연결이 끝날 때까지 유지하고, 연결이 끊긴 뒤 다음 정리 검사에서 정리한다. 정리 검사는 `VOA_SESSION_SWEEP_INTERVAL_S`마다 한다.
   - `required_streams`가 `inputs`에 없는 시나리오는 그 세션 동안 계속 `unknown`이다. 이를 위해 서버는 세션을 시작할 때, 선언되지 않은 각 stream에 대해 `health(status="down", detail_code="not_declared")` 관측을 엔진에 먼저 넣는다. 엔진 API는 추가하지 않는다.
 - `VOA_ALLOW_INSECURE_DEV=true`는 bind 주소가 `127.0.0.1`일 때만 허용한다. 이때 장치 `dev_fixture`는 secret 없이 세션을 만들 수 있다.
-- `POST /v1/sessions`와 resume endpoint를 제외한 세션 범위 REST API는 `Authorization: Bearer <access token>`을 요구한다. token은 URL, query, 로그에 넣지 않는다. 해당 token의 session과 path의 session이 다르면 404 `not_found`로 응답한다.
+- `POST /v1/sessions`와 refresh endpoint를 제외한 세션 범위 REST API는 `Authorization: Bearer <access token>`을 요구한다. token은 URL, query, 로그에 넣지 않는다. 해당 token의 session과 path의 session이 다르면 404 `not_found`로 응답한다.
 - REST 오류 본문은 `{"code": "<stable_code>"}`다. 인증 실패는 원인과 관계없이 401 `{"code":"unauthorized"}`, capability 범위 위반은 400 `capability_not_allowed`, 빈 outputs는 400 `no_output_capability`다. 요청 원문과 secret은 응답에 넣지 않는다.
 - 요청 본문이 스키마에 맞지 않으면 400 `invalid_request`다(프레임워크 기본 422는 입력을 되돌려주므로 쓰지 않는다). 서버가 준비되지 않았으면(`readyz` 실패) 세션 발급은 503 `not_ready`다.
 - 미등록 장치도 같은 비용의 scrypt 계산을 거쳐 401을 반환한다(응답 시간으로 등록 여부를 구분할 수 없게 한다). insecure dev의 `dev_fixture`는 모든 capability를 허용한다.
@@ -709,7 +711,8 @@ VOA_TICK_INTERVAL_MS=100
 VOA_HEARTBEAT_MS=1000                # 세션 응답의 heartbeat_ms
 VOA_CLIENT_WATCHDOG_MS=3000          # 세션 응답의 watchdog_ms (>= 2 × HEARTBEAT)
 VOA_TOKEN_TTL_S=900
-VOA_RESUME_TOKEN_TTL_S=86400
+VOA_REFRESH_TOKEN_TTL_S=86400
+VOA_SESSION_SWEEP_INTERVAL_S=60         # 세션 정리와 무관한 보존 기간 삭제는 §8.1(1시간)
 VOA_INPUT_QUEUE_MAX=64
 VOA_METADATA_RETENTION_DAYS=7
 VOA_RAW_MEDIA_STORAGE=false          # MVP 에서는 true 로 설정하면 시작 거부 (저장 경로 미구현)
@@ -719,7 +722,7 @@ VOA_MODEL_AUTO_DOWNLOAD=false
 
 상대 경로 설정은 서버 작업 디렉터리 `apps/server`를 기준으로 해석한다. 따라서 기본 `config/profiles/...`와 `config/devices.yaml`은 저장소 기준 `apps/server/config/...`를 가리킨다.
 
-숫자 설정은 `TICK_INTERVAL_MS > 0`, `HEARTBEAT_MS > 0`, `CLIENT_WATCHDOG_MS >= 2 × HEARTBEAT_MS`, `TOKEN_TTL_S > 0`, `RESUME_TOKEN_TTL_S >= TOKEN_TTL_S`, `INPUT_QUEUE_MAX >= 1`, `METADATA_RETENTION_DAYS >= 1`을 만족해야 한다. 위반하면 서버는 시작하지 않는다.
+숫자 설정은 `TICK_INTERVAL_MS > 0`, `HEARTBEAT_MS > 0`, `CLIENT_WATCHDOG_MS >= 2 × HEARTBEAT_MS`, `TOKEN_TTL_S > 0`, `REFRESH_TOKEN_TTL_S >= TOKEN_TTL_S`, `SESSION_SWEEP_INTERVAL_S > 0`, `INPUT_QUEUE_MAX >= 1`, `METADATA_RETENTION_DAYS >= 1`을 만족해야 한다. 위반하면 서버는 시작하지 않는다.
 
 어떤 모델을 쓸지는 `VOA_POLICY_PROFILE`(시나리오의 `required_models`)과 `VOA_MODELS_DIR`(manifest)이 정한다. `weights: file` 모델의 가중치는 `VOA_MODEL_WEIGHTS_DIR/<model_id>/` 아래에 사용자가 미리 받아 둔 파일만 읽고, 로드 전에 manifest의 `sha256`과 대조한다. 서버는 가중치를 다운로드하지 않는다(`VOA_MODEL_AUTO_DOWNLOAD=false`). manifest 대조가 실패하면 서버는 시작하되 `readyz` 503을 반환하고 엔진은 `ProfileError`로 만든다(INV-10).
 
