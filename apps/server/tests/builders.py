@@ -14,6 +14,16 @@ from voa.contracts.observation import (
 )
 from voa.engine.ports import FixedEpochClock
 
+MOCK_DETECTOR = ModelRef(id="mock-detector", revision="0")
+MOCK_TRACKER = ModelRef(id="mock-tracker", revision="0")
+
+
+class _Default:
+    """Sentinel: pick the mock model matching the payload kind (ADR-0004)."""
+
+
+DEFAULT_MODEL = _Default()
+
 
 def build_observation(
     *,
@@ -25,10 +35,17 @@ def build_observation(
     capture_ts_monotonic_ns: int = 0,
     server_received_mono_ns: int = 0,
     clock_quality: ClockQuality = "synced",
-    model: ModelRef | None = None,
+    model: ModelRef | None | _Default = DEFAULT_MODEL,
     quality_flags: frozenset[QualityFlag] = frozenset(),
     payload: Payload | None = None,
 ) -> Observation:
+    payload = (
+        payload
+        if payload is not None
+        else DetectionPayload(kind="object_detection", frame_id="frame_0001", detections=[])
+    )
+    if isinstance(model, _Default):
+        model = {"object_detection": MOCK_DETECTOR, "track_state": MOCK_TRACKER}.get(payload.kind)
     return Observation(
         schema_version="0.1.0",
         observation_id=observation_id,
@@ -42,11 +59,7 @@ def build_observation(
         clock_quality=clock_quality,
         model=model,
         quality_flags=quality_flags,
-        payload=(
-            payload
-            if payload is not None
-            else DetectionPayload(kind="object_detection", frame_id="frame_0001", detections=[])
-        ),
+        payload=payload,
     )
 
 

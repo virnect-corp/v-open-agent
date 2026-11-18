@@ -31,6 +31,7 @@ def policy(*, staleness_ms: int = 1_000) -> PolicyProfile:
                 {
                     "id": "obstacle",
                     "required_kinds": ["object_detection"],
+                    "required_models": {"object_detection": "mock-detector"},
                     "required_streams": ["camera_0"],
                     "labels": ["obstacle"],
                     "motion_classes": [],

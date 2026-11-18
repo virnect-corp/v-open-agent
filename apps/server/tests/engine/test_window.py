@@ -34,6 +34,11 @@ def make_scenario(*, tracked: bool = True) -> ScenarioProfile:
     return ScenarioProfile(
         id="moving" if tracked else "obstacle",
         required_kinds=["object_detection", "track_state"] if tracked else ["object_detection"],
+        required_models=(
+            {"object_detection": "mock-detector", "track_state": "mock-tracker"}
+            if tracked
+            else {"object_detection": "mock-detector"}
+        ),
         required_streams=["camera_0"],
         labels=["person"] if tracked else ["obstacle"],
         motion_classes=["moving"] if tracked else [],

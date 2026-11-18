@@ -12,6 +12,7 @@ import pytest
 from voa.contracts.observation import (
     Detection,
     DetectionPayload,
+    ModelRef,
     Observation,
     ObservationDraft,
     TrackPayload,
@@ -37,6 +38,7 @@ class LabelListDouble:
             stream_id="camera_9",
             seq=self._seq,
             capture_ts_monotonic_ns=item["ts"],
+            model=ModelRef(id="label-list-double", revision="1"),
             payload=DetectionPayload(
                 kind="object_detection",
                 frame_id=f"d{self._seq}",
@@ -112,6 +114,13 @@ def test_seq_strictly_increases_per_stream_and_kind(case: Case) -> None:
         key = (draft.stream_id, draft.payload.kind)
         assert draft.seq > last.get(key, -1)
         last[key] = draft.seq
+
+
+def test_vision_drafts_always_name_their_model(case: Case) -> None:
+    """ADR-0004: several models may analyse one frame, so each draft names its source."""
+    for draft in run(case, case.items):
+        if draft.payload.kind in ("object_detection", "track_state"):
+            assert draft.model is not None and draft.model.id
 
 
 def test_capture_time_comes_from_input_not_a_clock(case: Case) -> None:

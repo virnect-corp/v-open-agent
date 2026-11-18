@@ -14,6 +14,7 @@ params:
 scenarios:
   - id: moving_object_in_attention_zone
     required_kinds: [object_detection, track_state]
+    required_models: {object_detection: mock-detector, track_state: mock-tracker}
     required_streams: [camera_0]
     labels: [person]
     motion_classes: [moving]
@@ -23,6 +24,7 @@ scenarios:
     severity: attention
   - id: visible_obstacle_in_corridor
     required_kinds: [object_detection]
+    required_models: {object_detection: mock-detector}
     required_streams: [camera_0]
     labels: [obstacle]
     motion_classes: []

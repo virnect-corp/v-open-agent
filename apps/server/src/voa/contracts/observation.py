@@ -17,6 +17,11 @@ from voa.contracts.enums import (
 from voa.contracts.types import MODEL_CONFIG, BBox, Id, Score, UtcDatetime
 
 SCHEMA_VERSION = "0.1.0"
+VISION_KINDS: frozenset[SourceKind] = frozenset({"object_detection", "track_state"})
+MODEL_DESCRIPTION = (
+    "Model that produced this observation. Required when payload.kind is "
+    "object_detection or track_state (ADR-0004); optional for other kinds."
+)
 
 
 class ModelRef(BaseModel):
@@ -112,6 +117,11 @@ Payload = Annotated[
 class _FlagsMixin(BaseModel):
     quality_flags: frozenset[QualityFlag] = frozenset()
 
+    def _require_vision_model(self, model: "ModelRef | None", kind: SourceKind) -> None:
+        # Several models may analyse one frame; each vision observation names its source.
+        if model is None and kind in VISION_KINDS:
+            raise ValueError("model is required for object_detection and track_state")
+
     @field_serializer("quality_flags")
     def _sorted_flags(self, v: frozenset[str]) -> list[str]:
         # 결정론적 직렬화 (INV-05): 집합은 정렬된 리스트로 출력
@@ -126,8 +136,13 @@ class ObservationDraft(_FlagsMixin):
     seq: int = Field(ge=0)
     capture_ts_monotonic_ns: int
     clock_quality: ClockQuality = "unknown"
-    model: ModelRef | None = None
+    model: ModelRef | None = Field(default=None, description=MODEL_DESCRIPTION)
     payload: Payload
+
+    @model_validator(mode="after")
+    def _vision_model(self) -> "ObservationDraft":
+        self._require_vision_model(self.model, self.payload.kind)
+        return self
 
 
 class Observation(_FlagsMixin):
@@ -142,8 +157,13 @@ class Observation(_FlagsMixin):
     received_at_utc: UtcDatetime
     server_received_mono_ns: int
     clock_quality: ClockQuality
-    model: ModelRef | None
+    model: ModelRef | None = Field(description=MODEL_DESCRIPTION)
     payload: Payload
+
+    @model_validator(mode="after")
+    def _vision_model(self) -> "Observation":
+        self._require_vision_model(self.model, self.payload.kind)
+        return self
 
     @property
     def source_kind(self) -> SourceKind:
@@ -171,3 +191,8 @@ class Observation(_FlagsMixin):
             received_at_utc=received_at_utc,
         )
         return cls.model_validate(data)
+
+
+def model_id_of(observation: Observation) -> str:
+    """Model key of an observation: model.id, or "" when no model is named (SPEC 3.3)."""
+    return observation.model.id if observation.model is not None else ""

@@ -11,7 +11,7 @@ import pytest
 
 from tests.builders import build_observation
 from voa.contracts.decision import Alert, RiskDecision
-from voa.contracts.observation import AsrPayload, ModelRef, OcrPayload
+from voa.contracts.observation import AsrPayload, HealthPayload, ModelRef, OcrPayload
 from voa.storage.sqlite import SQLiteStore
 
 FIXTURE = Path(__file__).resolve().parents[4] / "contracts" / "fixtures" / "risk_event.json"
@@ -102,7 +102,10 @@ def test_observation_create_read_update_delete(store: SQLiteStore) -> None:
 
 
 def test_observation_without_model_has_null_model_fields(store: SQLiteStore) -> None:
-    observation = build_observation()
+    # Only non-vision kinds may omit the model (ADR-0004).
+    observation = build_observation(
+        payload=HealthPayload(kind="health", status="ok", detail_code="camera_ok")
+    )
     store.save_observation(observation, admission_status="stale_on_arrival")
     row = store.get_observation(observation.observation_id)
     assert row is not None
