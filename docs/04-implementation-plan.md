@@ -1,6 +1,6 @@
 # implementation plan - Task와 진행 방식
 
-> 각 Task는 `01-product-requirements.md`의 REQ ID에서 도출했다. 산출물 경로, 이름, 동작은 `02-technical-specification.md`(v0.4)를 따른다.
+> 각 Task는 `01-product-requirements.md`의 REQ ID에서 도출했다. 산출물 경로, 이름, 동작은 `02-technical-specification.md`(v0.5)를 따른다.
 > **한 owner는 한 번에 Task 하나만** 구현/검증하고, 끝나면 이 표의 상태를 `DONE`으로 바꾼다. 다중 개발자 병렬 작업은 `03-collaboration-architecture.md` §4~5를 따른다.
 > Claude Code에서는 `/task`(다음 TODO 자동 선택) 또는 `/task TASK-07`. Codex에서는 §5의 프롬프트를 쓴다.
 
@@ -52,11 +52,25 @@ TASK-15 검증 (2026-11-10): 네트워크 차단 Docker 개발 컨테이너에�
 
 ---
 
+## 2-1. Stage A+ — 다중 모델 공통 인프라 (ADR-0004)
+
+한 카메라 프레임을 여러 모델이 분석해도 각 시나리오가 자기 근거 모델의 관측만으로 판정하도록 Stage A 산출물을 보완한다. 시나리오(균열, 벽 손상, 화재, 연기 등)는 이 인프라 위에 모델 manifest와 profile로 추가한다. **Stage B 시작 전에 끝낸다.**
+
+| Task | 제목 | REQ | 산출물 (SPEC 절) | 수용 테스트 | 선행 | 상태 |
+|---|---|---|---|---|---|---|
+| TASK-24 | 모델 출처 계약과 profile `required_models` | ENG-19, CON-04 | `apps/server/src/voa/contracts/observation.py`(영상 계열 `model` 필수, Draft/Observation), `apps/server/src/voa/engine/profile.py`(`required_models`), `apps/server/config/profiles/indoor_research_v0.yaml`, `apps/server/tests/fixtures/profiles/`, `apps/server/tests/builders.py`(영상 관측 기본 `model`), `contracts/schemas` 스냅샷 (§3.3, §4.9) | 영상 kind에 `model` 없음 → `ValidationError`(Draft, Observation 각각), health는 `model` 없이 허용, `required_models` key가 `required_kinds`와 다르거나 누락 → `profile_invalid`, 기존 테스트와 UC fixture 유지 | 14 | TODO |
+| TASK-25 | 엔진 다중 모델 키와 근거 모델 필터 | ENG-19, INV-01, INV-02, INV-07 | `apps/server/src/voa/engine/admission.py`, `apps/server/src/voa/engine/window.py`(키 `(stream_id, source_kind, model_id)`, Frame Assembly `required_models` 필터), `apps/server/tests/engine/test_invariants.py` 생성기에 두 모델 경우 추가, 두 모델 UC fixture (§4.2~4.4) | T-R19: 같은 `frame_id`를 두 모델이 분석하면 두 관측 모두 accepted, 각 시나리오 근거는 자기 모델 관측만, 한 모델만 멈추면 그 모델 시나리오만 unknown(`input_stale`), 다른 모델 관측으로 프레임이 완성되지 않음, `window_max_items`와 seq 검사는 모델 키별 | 24 | TODO |
+| TASK-26 | 모델 manifest와 profile 대조 | CON-04, DAT-05 | `apps/server/src/voa/config/model_registry.py`(`load_manifests`, `check_profile_models`), `apps/server/config/models/mock-detector.yaml`, `apps/server/config/models/mock-tracker.yaml`, 리플레이 CLI의 기본 대조 (§4.9, §9) | manifest 누락, kind 불일치, label이 manifest 밖 → `profile_invalid`(detail에 시나리오 ID와 항목 이름만), `weights: file`인데 `sha256` 없음 → 거부, 기본 profile과 mock manifest는 통과 | 24 | TODO |
+
+**Stage A+ 게이트**: TASK-24~26이 DONE이고, T-R19와 기존 INV-01~10, UC-01~04 리플레이가 통과해야 한다.
+
+---
+
 ## 3. Stage B — 서버/전송 (MVP-1 완성)
 
 | Task | 제목 | REQ | 산출물 (SPEC 절) | 수용 테스트 | 선행 | 상태 |
 |---|---|---|---|---|---|---|
-| TASK-16 | 설정/앱 골격 | COM-06, DAT-03, DAT-04 | 의존성 추가(fastapi, uvicorn, httpx-dev, §9 등록부 갱신), `apps/server/src/voa/server/settings.py`, `apps/server/src/voa/server/runtime.py`, `apps/server/src/voa/server/app.py`, `apps/server/src/voa/server/__main__.py`, `/v1/healthz`, `/v1/readyz` | 기본값, 숫자 교차 검증, pilot cert/key 없음 시작 거부, pilot uvicorn SSL 인자 전달, RAW_MEDIA=true 시작 거부, profile 무효 시 readyz 503, `SecureIdFactory` ID 형식, `AnchoredUtcClock` monotonic-to-UTC 매핑 | A 게이트 | TODO |
+| TASK-16 | 설정/앱 골격 | COM-06, DAT-03, DAT-04 | 의존성 추가(fastapi, uvicorn, httpx-dev, §9 등록부 갱신), `apps/server/src/voa/server/settings.py`, `apps/server/src/voa/server/runtime.py`, `apps/server/src/voa/server/app.py`, `apps/server/src/voa/server/__main__.py`, `/v1/healthz`, `/v1/readyz` | 기본값, 숫자 교차 검증, pilot cert/key 없음 시작 거부, pilot uvicorn SSL 인자 전달, RAW_MEDIA=true 시작 거부, profile 무효 시 readyz 503, `SecureIdFactory` ID 형식, `AnchoredUtcClock` monotonic-to-UTC 매핑 | A+ 게이트 | TODO |
 | TASK-17 | 장치 등록/세션/capability | COM-01, DEV-01 | `apps/server/src/voa/server/auth.py`, `apps/server/config/devices.example.yaml`, `POST /v1/sessions`, `POST /v1/sessions/{id}/resume` (§7.1, §7.4 enum) | scrypt 형식/비교, 정상 발급, access/resume 만료, resume 회전 후 이전 token 폐기, 서버 재시작 후 resume 401, 잘못된 secret/미등록 장치 401, capability 범위 밖 400, outputs 빈 목록 400, insecure dev는 127.0.0.1에서만 | 16 | TODO |
 | TASK-18 | WS 스트림 ↔ 엔진 | COM-02 | `apps/server/src/voa/contracts/messages.py`, JSON Schema 스냅샷, `apps/server/src/voa/server/ws.py`, 세션별 엔진, tick 루프 (§7.2) | 5초 안에 auth 없음/token 오류 → 4401, Draft → 관측 → `decision`/`alert` push, 입력 끊김 → unknown push, non-accepted → `admission`, heartbeat 주기, 미선언 입력은 health down 주입 (T-R17), `resume` message는 auth 후 `last_alert_seq`만 수용, 예약 메시지 → `unsupported_message_type` | 17 | TODO |
 | TASK-19 | Alert 전달/ACK/notice | COM-03, DEV-03 | `apps/server/src/voa/server/dispatch.py`, `POST /v1/alerts/{id}/ack`, WS `ack`, `notice` 송신 (§7.3, §7.4) | queued→expired, sent→unknown_delivery, received 유지, received→played, 역행 없음, 중복 ACK 무시, 늦은 ACK 상태 복구와 `late_ack` 로그 (T-R11), notice 조건 (T-R18) | 18 | TODO |
