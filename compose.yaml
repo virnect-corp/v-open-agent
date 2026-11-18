@@ -21,21 +21,33 @@ services:
     network_mode: none
     command: ["scripts/check.sh"]
 
-  # 서버 실행 (TASK-16 이후 동작). `docker compose --profile server up server`
+  # 서버 실행 (SPEC 8.4). `docker compose --profile server up server`
+  # - 의존성은 이미지에, 소스는 저장소 bind mount(/workspace)로 쓴다. 소스 수정은 재빌드 없이 반영.
+  # - 모델: 가중치 폴더를 /models 에 읽기 전용으로 마운트하고, profile/manifest 는 환경변수로 고른다.
+  #   예) VOA_POLICY_PROFILE=config/profiles/<p>.yaml VOA_MODEL_WEIGHTS_HOST=~/weights \
+  #       docker compose --profile server up server
   server:
     profiles: ["server"]
     image: v-open-agent:server
     build:
       <<: *server-build
       target: server
+    working_dir: /workspace/apps/server   # SPEC 8.3 상대 경로 기준
+    command: ["python", "-m", "voa.server"]
     environment:
+      PYTHONPATH: /workspace/apps/server/src
       VOA_PROFILE: dev-mock
       VOA_BIND: 0.0.0.0           # 컨테이너 내부 bind. 외부 노출 범위는 ports 가 결정
       VOA_ALLOW_INSECURE_DEV: "false" # 0.0.0.0 bind에서 secret 생략 금지
       VOA_PORT: "8765"
       VOA_DB_PATH: /data/voa.sqlite3
+      VOA_POLICY_PROFILE: ${VOA_POLICY_PROFILE:-config/profiles/indoor_research_v0.yaml}
+      VOA_MODELS_DIR: ${VOA_MODELS_DIR:-config/models}
+      VOA_MODEL_WEIGHTS_DIR: /models
+      VOA_DEVICES_FILE: ${VOA_DEVICES_FILE:-config/devices.yaml}
     volumes:
-      - ./apps/server/config:/opt/voa/config:ro
+      - .:/workspace
+      - ${VOA_MODEL_WEIGHTS_HOST:-./var/models}:/models:ro
       - voa-data:/data            # 메타데이터 DB 는 공유 폴더가 아닌 도커 볼륨에 둔다
     ports:
       - "127.0.0.1:8765:8765"     # 기본은 호스트 loopback 만. LAN 노출은 pilot 단계에서 결정

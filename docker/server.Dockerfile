@@ -42,6 +42,9 @@ RUN python -c "import tomllib; p = tomllib.load(open('/tmp/pyproject.toml', 'rb'
 
 COPY --chown=voa:voa apps/server/src /opt/voa/src
 COPY --chown=voa:voa apps/server/config /opt/voa/config
+# Mount point of the metadata DB volume (VOA_DB_PATH=/data/...). A new named volume
+# inherits this ownership, so the non-root server can create the SQLite file.
+RUN install -d -o voa -g voa /data
 
 ENV PYTHONPATH=/opt/voa/src
 USER voa

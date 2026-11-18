@@ -45,22 +45,22 @@
 
 ## 지금 어디까지 왔나
 
-현재 `main` 브랜치는 Stage A의 기반을 구현하고 있습니다.
+Stage A(판단 엔진 코어)와 Stage A+(다중 모델 공통 인프라)가 끝났고, Stage B(서버/전송)를 진행하고 있습니다.
 
 완료된 부분:
 
 - Observation, RiskDecision, Alert 데이터 계약과 JSON Schema 스냅샷
-- 정책 프로파일 모델, YAML 로더, 안전한 오류 처리
-- 리플레이를 위한 결정론적 ID와 UTC 시계
-- 엔진과 계약 모듈이 금지된 라이브러리를 import하지 않는지 확인하는 검사
-- 직접 의존성의 라이선스 등록부 검사
+- 판단 엔진 6단계와 `DecisionEngine` 통합, 불변식(INV-01~10) 테스트
+- fixture 재생기, mock provider, 리플레이 CLI(`python -m voa.replay`)
+- 근거 검증, 설명 템플릿 폴백, 행동 허용 목록
+- 한 프레임을 여러 모델이 분석하는 구조(ADR-0004)와 모델 manifest 대조
+- 서버 골격: 설정 검증, `/v1/healthz`, `/v1/readyz`, Docker 실행
 
 아직 남은 부분:
 
-- 판단 엔진의 나머지 단계와 전체 통합
-- fixture 재생기와 mock provider
-- API 서버, WebSocket 전송, ACK와 재접속
-- Android 참조 클라이언트와 실제 센서 provider
+- 장치 인증과 세션, WebSocket 전송, 경고 전달과 ACK, 재접속 (Stage B)
+- 실제 모델 provider(open-vocabulary, RT-DETR/RF-DETR) (Stage C)
+- Android 참조 클라이언트와 실제 센서 연결
 
 성능 수치는 아직 측정하지 않았습니다. 측정 로그가 생기기 전까지 정확도와 지연 시간은 `TBD`로 둡니다.
 
@@ -88,7 +88,26 @@ scripts/dev.sh pytest -q apps/server/tests/contracts
 scripts/dev.sh bash
 ```
 
-API 서버 실행은 아직 준비되지 않았습니다. 서버 골격과 `/v1/healthz`는 구현 계획의 TASK-16에서 추가됩니다.
+### 서버 실행 (Docker)
+
+의존성은 이미지에 설치되고, 소스는 저장소 폴더를 컨테이너에 공유해서 씁니다. 소스를 고치면 이미지를 다시 빌드하지 않아도 반영됩니다.
+
+```bash
+cp apps/server/config/devices.example.yaml apps/server/config/devices.yaml   # 장치 등록 (git 제외)
+docker compose --profile server up --build server
+curl http://127.0.0.1:8765/v1/readyz    # {"status":"ready"}
+```
+
+모델은 환경변수로 고릅니다. 가중치는 이미지에 넣지 않고 호스트 폴더를 `/models`에 읽기 전용으로 연결합니다.
+
+```bash
+VOA_POLICY_PROFILE=config/profiles/<profile>.yaml \
+VOA_MODELS_DIR=config/models \
+VOA_MODEL_WEIGHTS_HOST=~/voa-weights \
+docker compose --profile server up server
+```
+
+설정 값과 규칙은 `docs/02-technical-specification.md` §8.3, §8.4에 있습니다.
 
 ## 저장소 둘러보기
 

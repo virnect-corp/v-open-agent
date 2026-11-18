@@ -1,0 +1,168 @@
+"""Server settings from VOA_* environment variables (SPEC 8.3, DAT-04).
+
+Invalid settings refuse start. Errors name the variables only, never their values.
+Relative paths are resolved against the server working directory (apps/server).
+"""
+
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal, TypeVar
+
+ServerProfile = Literal["dev-mock", "pilot"]
+T = TypeVar("T")
+
+DEFAULTS: dict[str, str] = {
+    "VOA_PROFILE": "dev-mock",
+    "VOA_BIND": "127.0.0.1",
+    "VOA_PORT": "8765",
+    "VOA_ALLOW_INSECURE_DEV": "true",
+    "VOA_TLS_CERT": "",
+    "VOA_TLS_KEY": "",
+    "VOA_POLICY_PROFILE": "config/profiles/indoor_research_v0.yaml",
+    "VOA_MODELS_DIR": "config/models",
+    "VOA_MODEL_WEIGHTS_DIR": "var/models",
+    "VOA_DEVICES_FILE": "config/devices.yaml",
+    "VOA_DB_PATH": "var/voa.sqlite3",
+    "VOA_TICK_INTERVAL_MS": "100",
+    "VOA_HEARTBEAT_MS": "1000",
+    "VOA_CLIENT_WATCHDOG_MS": "3000",
+    "VOA_TOKEN_TTL_S": "900",
+    "VOA_RESUME_TOKEN_TTL_S": "86400",
+    "VOA_INPUT_QUEUE_MAX": "64",
+    "VOA_METADATA_RETENTION_DAYS": "7",
+    "VOA_RAW_MEDIA_STORAGE": "false",
+    "VOA_EXTERNAL_NETWORK": "false",
+    "VOA_MODEL_AUTO_DOWNLOAD": "false",
+}
+LOOPBACK = "127.0.0.1"
+
+
+class SettingsError(ValueError):
+    def __init__(self, fields: list[str]) -> None:
+        self.fields = sorted(set(fields))
+        super().__init__("invalid settings: " + ", ".join(self.fields))
+
+
+@dataclass(frozen=True)
+class Settings:
+    profile: ServerProfile
+    bind: str
+    port: int
+    allow_insecure_dev: bool
+    tls_cert: Path | None
+    tls_key: Path | None
+    policy_profile: Path
+    models_dir: Path
+    model_weights_dir: Path
+    devices_file: Path
+    db_path: Path
+    tick_interval_ms: int
+    heartbeat_ms: int
+    client_watchdog_ms: int
+    token_ttl_s: int
+    resume_token_ttl_s: int
+    input_queue_max: int
+    metadata_retention_days: int
+    raw_media_storage: bool
+    external_network: bool
+    model_auto_download: bool
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str], *, base_dir: Path) -> "Settings":
+        raw = {name: env.get(name, default) for name, default in DEFAULTS.items()}
+        bad: list[str] = []
+
+        def parse(name: str, convert: Callable[[str], T], fallback: T) -> T:
+            try:
+                return convert(raw[name])
+            except ValueError:
+                bad.append(name)
+                return fallback
+
+        def path(name: str) -> Path:
+            value = Path(raw[name])
+            return value if value.is_absolute() else base_dir / value
+
+        def optional_path(name: str) -> Path | None:
+            return path(name) if raw[name] else None
+
+        fallback: ServerProfile = "dev-mock"
+        profile = parse("VOA_PROFILE", _profile, fallback)
+        settings = cls(
+            profile=profile,
+            bind=raw["VOA_BIND"],
+            port=parse("VOA_PORT", int, 0),
+            allow_insecure_dev=parse("VOA_ALLOW_INSECURE_DEV", _bool, False),
+            tls_cert=optional_path("VOA_TLS_CERT"),
+            tls_key=optional_path("VOA_TLS_KEY"),
+            policy_profile=path("VOA_POLICY_PROFILE"),
+            models_dir=path("VOA_MODELS_DIR"),
+            model_weights_dir=path("VOA_MODEL_WEIGHTS_DIR"),
+            devices_file=path("VOA_DEVICES_FILE"),
+            db_path=path("VOA_DB_PATH"),
+            tick_interval_ms=parse("VOA_TICK_INTERVAL_MS", int, 0),
+            heartbeat_ms=parse("VOA_HEARTBEAT_MS", int, 0),
+            client_watchdog_ms=parse("VOA_CLIENT_WATCHDOG_MS", int, 0),
+            token_ttl_s=parse("VOA_TOKEN_TTL_S", int, 0),
+            resume_token_ttl_s=parse("VOA_RESUME_TOKEN_TTL_S", int, 0),
+            input_queue_max=parse("VOA_INPUT_QUEUE_MAX", int, 0),
+            metadata_retention_days=parse("VOA_METADATA_RETENTION_DAYS", int, 0),
+            raw_media_storage=parse("VOA_RAW_MEDIA_STORAGE", _bool, True),
+            external_network=parse("VOA_EXTERNAL_NETWORK", _bool, True),
+            model_auto_download=parse("VOA_MODEL_AUTO_DOWNLOAD", _bool, True),
+        )
+        bad += settings._violations()
+        if bad:
+            raise SettingsError(bad)
+        return settings
+
+    def _violations(self) -> list[str]:
+        bad: list[str] = []
+        if not 1 <= self.port <= 65535:
+            bad.append("VOA_PORT")
+        if self.tick_interval_ms <= 0:
+            bad.append("VOA_TICK_INTERVAL_MS")
+        if self.heartbeat_ms <= 0:
+            bad.append("VOA_HEARTBEAT_MS")
+        if self.client_watchdog_ms < 2 * self.heartbeat_ms:
+            bad.append("VOA_CLIENT_WATCHDOG_MS")
+        if self.token_ttl_s <= 0:
+            bad.append("VOA_TOKEN_TTL_S")
+        if self.resume_token_ttl_s < self.token_ttl_s:
+            bad.append("VOA_RESUME_TOKEN_TTL_S")
+        if self.input_queue_max < 1:
+            bad.append("VOA_INPUT_QUEUE_MAX")
+        if self.metadata_retention_days < 1:
+            bad.append("VOA_METADATA_RETENTION_DAYS")
+        # Raw media storage has no opt-in path yet (AGENTS rule 5).
+        if self.raw_media_storage:
+            bad.append("VOA_RAW_MEDIA_STORAGE")
+        # No external calls or downloads exist; enabling them would silently do nothing.
+        if self.external_network:
+            bad.append("VOA_EXTERNAL_NETWORK")
+        if self.model_auto_download:
+            bad.append("VOA_MODEL_AUTO_DOWNLOAD")
+        if self.allow_insecure_dev and (self.profile == "pilot" or self.bind != LOOPBACK):
+            bad.append("VOA_ALLOW_INSECURE_DEV")
+        if self.profile == "pilot":
+            if self.tls_cert is None or not self.tls_cert.is_file():
+                bad.append("VOA_TLS_CERT")
+            if self.tls_key is None or not self.tls_key.is_file():
+                bad.append("VOA_TLS_KEY")
+        return bad
+
+
+def _bool(value: str) -> bool:
+    lowered = value.strip().lower()
+    if lowered not in ("true", "false"):
+        raise ValueError
+    return lowered == "true"
+
+
+def _profile(value: str) -> ServerProfile:
+    if value == "dev-mock":
+        return "dev-mock"
+    if value == "pilot":
+        return "pilot"
+    raise ValueError
