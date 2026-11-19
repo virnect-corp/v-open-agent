@@ -25,7 +25,7 @@ dev = [
 server = [
     "fastapi>=0.110,<1",
     "uvicorn>=0.29",
-    "websockets>=12",  # uvicorn's WebSocket protocol implementation (SPEC 7.2)
+    "websockets>=13",  # uvicorn WebSocket protocol, simulator client asyncio API (SPEC 7.2)
 ]
 
 [tool.hatch.build.targets.wheel]

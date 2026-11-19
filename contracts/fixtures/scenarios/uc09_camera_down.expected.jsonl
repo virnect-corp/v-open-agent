@@ -1,0 +1,3 @@
+{"scenario_id":"visible_obstacle_in_corridor","previous_state":"unknown","state":"candidate","reason_codes":["fresh_evidence_returned"],"evidence_ids":["obs_0000"],"risk_event_id":"risk_0001"}
+{"scenario_id":"visible_obstacle_in_corridor","previous_state":"candidate","state":"warning","reason_codes":["temporal_confirmation_passed"],"evidence_ids":["obs_0002"],"risk_event_id":"risk_0001","alert_id":"alert_0001"}
+{"scenario_id":"visible_obstacle_in_corridor","previous_state":"warning","state":"unknown","reason_codes":["sensor_down"],"evidence_ids":[],"risk_event_id":"risk_0001"}
