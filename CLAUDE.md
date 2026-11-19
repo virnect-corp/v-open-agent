@@ -11,7 +11,7 @@
 문서끼리 충돌하거나 명세에 없는 결정(라이브러리, 임계값, 필드)이 필요하면 **구현을 멈추고** 충돌 지점과 선택지를 제시한다.
 
 ## 2. 현재 상태
-- Stage A(TASK-01~15A) 완료. 다음 작업은 Stage A+(TASK-24~26, ADR-0004 다중 모델 공통 인프라)이고, 그 다음이 Stage B다. 실행 환경은 Docker(§4)이고 진행 상황은 `docs/04-implementation-plan.md`의 상태 열이 기준이다.
+- Stage A(TASK-01~15A), Stage A+(TASK-24~26), Stage B(TASK-16~23, 27, 28) 완료. 다음 작업은 Stage B 게이트(MVP-1, PLAN §3) 확인이고, 그 다음이 Stage C(실 Vision)다. Stage C는 진입 전에 OQ-01, OQ-04, OQ-06을 결정하고 SPEC을 먼저 확장한 뒤 Task로 세분화한다(PLAN §4). 실행 환경은 Docker(§4)이고 진행 상황은 `docs/04-implementation-plan.md`의 상태 열이 기준이다.
 - 실제로 파일을 만들고 명령을 실행하기 전에는 "테스트가 통과한다"고 말하지 않는다.
 
 ## 3. 슬래시 명령
