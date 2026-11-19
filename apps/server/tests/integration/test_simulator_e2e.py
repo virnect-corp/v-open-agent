@@ -1,14 +1,11 @@
 """TASK-22 simulator = glass client against a real uvicorn server (UC-01..05, 08, 09; T-R16).
 
-Each test starts the app on 127.0.0.1 (loopback works with `network_mode: none`).
+Each test starts the app on 127.0.0.1 (`live_server`).
 Time is real here, so assertions use state sequences and output logs, not IDs or
 exact timestamps. Heartbeat 100 ms / watchdog 300 ms keep the run short.
 """
 
 import asyncio
-import shutil
-import socket
-import threading
 import time
 from collections.abc import Callable, Coroutine, Iterator
 from pathlib import Path
@@ -16,84 +13,27 @@ from typing import Any
 
 import httpx
 import pytest
-import uvicorn
 
-from voa.server.app import create_app
-from voa.server.settings import Settings
+from tests.integration.live_server import (
+    SCENARIOS,
+    SECRET,
+    WATCHDOG_MS,
+    LiveServer,
+    make_workdir,
+)
 from voa.simulator.__main__ import main as sim_main
 from voa.simulator.adapter import ClientConfig, GlassClient, SessionRejected
 from voa.simulator.fixture import TimedDraft, load_drafts
 from voa.simulator.outputs import OutputName
 
-SERVER = Path(__file__).resolve().parents[2]
-CONFIG = SERVER / "config"
-SCENARIOS = SERVER.parents[1] / "contracts" / "fixtures" / "scenarios"
-SECRET = "example-secret-change-me"
 OBSTACLE = "visible_obstacle_in_corridor"
 MOVING = "moving_object_in_attention_zone"
-HEARTBEAT_MS = 100
-WATCHDOG_MS = 300
 FAST_BACKOFF = (0.05, 0.1, 0.2, 0.4)
-
-
-def free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
-
-
-class LiveServer:
-    """uvicorn in a thread; `restart` brings up a fresh process state on the same port."""
-
-    def __init__(self, workdir: Path) -> None:
-        self.port = free_port()
-        self.settings = Settings.from_env(
-            {
-                "VOA_HEARTBEAT_MS": str(HEARTBEAT_MS),
-                "VOA_CLIENT_WATCHDOG_MS": str(WATCHDOG_MS),
-                "VOA_DB_PATH": str(workdir / "voa.sqlite3"),
-            },
-            base_dir=workdir,
-        )
-        self._server: uvicorn.Server | None = None
-        self._thread: threading.Thread | None = None
-
-    @property
-    def url(self) -> str:
-        return f"http://127.0.0.1:{self.port}"
-
-    def start(self) -> None:
-        app = create_app(lambda: self.settings)
-        config = uvicorn.Config(
-            app,
-            host="127.0.0.1",
-            port=self.port,
-            log_level="warning",
-            lifespan="on",
-            timeout_graceful_shutdown=1,
-        )
-        server = uvicorn.Server(config)
-        thread = threading.Thread(target=server.run, daemon=True)
-        thread.start()
-        deadline = time.monotonic() + 10
-        while not server.started:
-            assert thread.is_alive() and time.monotonic() < deadline, "server did not start"
-            time.sleep(0.01)
-        self._server, self._thread = server, thread
-
-    def stop(self) -> None:
-        if self._server is not None and self._thread is not None:
-            self._server.should_exit = True
-            self._thread.join(timeout=10)
-        self._server = self._thread = None
 
 
 @pytest.fixture
 def server(tmp_path: Path) -> Iterator[LiveServer]:
-    shutil.copytree(CONFIG / "profiles", tmp_path / "config" / "profiles")
-    shutil.copytree(CONFIG / "models", tmp_path / "config" / "models")
-    shutil.copy(CONFIG / "devices.example.yaml", tmp_path / "config" / "devices.yaml")
-    live = LiveServer(tmp_path)
+    live = LiveServer(make_workdir(tmp_path))
     live.start()
     yield live
     live.stop()
