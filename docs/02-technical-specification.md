@@ -698,6 +698,8 @@ OutputCap = Literal["hud", "speaker", "haptic"]
 - `logging`으로 JSON 한 줄씩 기록한다.
 - 허용 키: `event, session_id, device_id, stream_id, seq, observation_id, scenario_id, state, reason_codes, alert_id, status, latency_us, error_code`
 - 이 목록에 없는 키는 포맷터가 버린다. 토큰, secret, payload, text 필드는 구조적으로 로그에 남을 수 없다.
+- `python -m voa.server`는 uvicorn에 `voa.server.logconfig.server_log_config()`를 넘긴다. 서버 로거(`uvicorn`, `uvicorn.error`, `uvicorn.access`, `websockets`, `voa`)는 모두 이 포맷터로 stderr에 쓰고, 자유 문구, 인자, traceback은 출력하지 않는다. `event`가 없는 기록은 logger 이름을 `event`로 쓴다. access log는 끈다.
+- 앱 시작 시 위 로거의 수준을 INFO 이상으로 올린다(낮추지는 않음). uvicorn은 WebSocket 프레임 원문을 `uvicorn.error` DEBUG로 남기므로, uvicorn을 `--log-level debug`로 직접 실행해도 프레임 덤프가 나오지 않게 한다(DAT-02).
 
 ### 8.3 설정 (`voa.server.settings`, 환경변수 → 기본값)
 ```dotenv

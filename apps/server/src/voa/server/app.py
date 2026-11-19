@@ -34,6 +34,7 @@ from voa.server.auth import (
     authenticate_device,
 )
 from voa.server.devices import DeviceConfig, load_devices
+from voa.server.logconfig import pin_log_levels
 from voa.server.runtime import AnchoredUtcClock, SecureIdFactory
 from voa.server.session import SessionStream
 from voa.server.settings import Settings
@@ -199,6 +200,7 @@ def create_app(
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        pin_log_levels()  # no DEBUG frame dumps, however uvicorn was started (DAT-02)
         runtime = ServerRuntime.build(load_settings(), mono_ns)
         app.state.runtime = runtime
         runtime.purge_metadata()  # at start, then hourly (SPEC 8.1)
