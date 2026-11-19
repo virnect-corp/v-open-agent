@@ -33,6 +33,7 @@ UC_FIXTURES = [
     "uc02_moving_person",
     "uc03_input_lost",
     "uc04_obstacle_cleared",
+    "uc09_camera_down",
 ]
 CLOCK = FixedEpochClock()
 
@@ -93,6 +94,7 @@ def test_use_case_stories() -> None:
     assert states["uc03_input_lost"][-1] == ("warning", "unknown")
     assert ("warning", "resolved") not in states["uc03_input_lost"]
     assert states["uc04_obstacle_cleared"][-2:] == [("warning", "resolved"), ("resolved", "clear")]
+    assert states["uc09_camera_down"][-1] == ("warning", "unknown")
 
 
 def test_uc02_fixture_is_what_the_mock_provider_emits() -> None:

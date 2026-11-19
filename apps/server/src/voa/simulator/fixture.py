@@ -149,11 +149,19 @@ def _rows(lines: Iterable[str]) -> Iterable[tuple[int, object]]:
         yield line_no, data
 
 
-def parse_fixture(lines: Iterable[str], clock: UtcAt) -> list[ReplayEvent]:
-    """Fill observation_id obs_NNNN (0-based, observations only) and server time."""
-    events: list[ReplayEvent] = []
+@dataclass(frozen=True)
+class TimedDraft:
+    """A fixture line as a client sends it: a Draft at `at_ms`, or a tick (None) to wait for."""
+
+    line_no: int
+    at_ms: int
+    draft: ObservationDraft | None
+
+
+def parse_drafts(lines: Iterable[str]) -> list[TimedDraft]:
+    """Validate a fixture without filling server fields (glass client playback)."""
+    rows: list[TimedDraft] = []
     last_at_ms = 0
-    count = 0
     for line_no, data in _rows(lines):
         try:
             row = _FixtureLine.model_validate(data)
@@ -162,12 +170,27 @@ def parse_fixture(lines: Iterable[str], clock: UtcAt) -> list[ReplayEvent]:
         if row.at_ms < last_at_ms:
             raise FixtureError(line_no, "at_ms must be non-decreasing")
         last_at_ms = row.at_ms
+        rows.append(TimedDraft(line_no, row.at_ms, row.obs))
+    return rows
+
+
+def load_drafts(path: str | Path) -> list[TimedDraft]:
+    with Path(path).open(encoding="utf-8") as handle:
+        return parse_drafts(handle)
+
+
+def parse_fixture(lines: Iterable[str], clock: UtcAt) -> list[ReplayEvent]:
+    """Fill observation_id obs_NNNN (0-based, observations only) and server time."""
+    events: list[ReplayEvent] = []
+    count = 0
+    for row in parse_drafts(lines):
+        line_no = row.line_no
         now_mono_ns = row.at_ms * 1_000_000
-        if row.obs is None:
+        if row.draft is None:
             events.append(ReplayTick(line_no, now_mono_ns))
             continue
         observation = Observation.from_draft(
-            row.obs,
+            row.draft,
             observation_id=f"obs_{count:04d}",
             session_id=FIXTURE_SESSION_ID,
             device_id=FIXTURE_DEVICE_ID,
