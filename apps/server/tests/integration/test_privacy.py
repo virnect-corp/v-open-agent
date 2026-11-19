@@ -33,6 +33,7 @@ from voa.contracts.observation import (
     ObservationDraft,
     OcrPayload,
 )
+from voa.server.logconfig import server_log_config
 from voa.simulator.adapter import ClientConfig, GlassClient, post_json
 
 ALERT_TEXT = "전방 통로에 장애물이 보입니다."
@@ -102,23 +103,34 @@ class RecordCollector(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         self.dumps.append(record_dump(record))
 
+    def attach(self) -> None:
+        for name in LOGGERS:
+            logger = logging.getLogger(name)
+            if self not in logger.handlers:
+                logger.addHandler(self)
+
 
 LOGGERS = ("", "uvicorn", "uvicorn.error", "uvicorn.access", "websockets", "voa", "fastapi")
 
 
 @pytest.fixture
 def records() -> Iterator[RecordCollector]:
-    """Attach to every logger that does not propagate to root; run at INFO."""
+    """Collect at INFO from every logger, also ones that do not propagate to root.
+
+    The server log config replaces handlers of the server loggers, so tests call
+    `attach()` again after start; the original logging state is restored afterwards.
+    """
     collector = RecordCollector()
-    root = logging.getLogger()
-    old_level = root.level
-    root.setLevel(logging.INFO)
-    for name in LOGGERS:
-        logging.getLogger(name).addHandler(collector)
+    loggers = [logging.getLogger(name) for name in LOGGERS]
+    saved = [(lg, list(lg.handlers), lg.propagate, lg.level, lg.disabled) for lg in loggers]
+    logging.getLogger().setLevel(logging.INFO)
+    collector.attach()
     yield collector
-    for name in LOGGERS:
-        logging.getLogger(name).removeHandler(collector)
-    root.setLevel(old_level)
+    for logger, handlers, propagate, level, disabled in saved:
+        logger.handlers[:] = handlers
+        logger.propagate = propagate
+        logger.setLevel(level)
+        logger.disabled = disabled
 
 
 # --- scanner self-test (failure path) ---
@@ -323,13 +335,28 @@ async def exercise(live: LiveServer, observed: Observed) -> None:
     await silent.stop()
 
 
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "uvicorn_info",  # uvicorn default logging
+        "uvicorn_debug",  # `uvicorn ... --log-level debug`: no frame dumps
+        "server_main",  # the `python -m voa.server` log config (JSON allowlist)
+        "server_main_debug",
+    ],
+)
 def test_e2e_run_leaves_no_secret_token_or_payload_text(
-    tmp_path: Path, capfd: pytest.CaptureFixture[str], records: RecordCollector
+    mode: str, tmp_path: Path, capfd: pytest.CaptureFixture[str], records: RecordCollector
 ) -> None:
     workdir = make_workdir(tmp_path / "server")
-    live = LiveServer(workdir, {"VOA_POLICY_PROFILE": str(short_ttl_profile(workdir))})
+    live = LiveServer(
+        workdir,
+        {"VOA_POLICY_PROFILE": str(short_ttl_profile(workdir))},
+        log_level="debug" if mode.endswith("debug") else "info",
+        log_config=server_log_config() if mode.startswith("server_main") else None,
+    )
     observed = Observed()
     live.start()
+    records.attach()
     try:
         asyncio.run(exercise(live, observed))
     finally:
@@ -367,6 +394,9 @@ def test_e2e_run_leaves_no_secret_token_or_payload_text(
         leaks.scan(f"client_view_{index}", text.encode("utf-8"))
 
     # The run really produced logs and rows, so "0 found" is not vacuous.
-    assert any('"late_ack"' in dump or "late_ack" in dump for dump in records.dumps)
-    assert err or records.dumps
+    assert any("late_ack" in dump for dump in records.dumps)
+    if mode.startswith("server_main"):
+        lines = [line for line in err.splitlines() if line.strip()]
+        assert lines and all(isinstance(json.loads(line), dict) for line in lines)
+        assert '"event":"late_ack"' in err
     assert leaks.found == [], leaks.found

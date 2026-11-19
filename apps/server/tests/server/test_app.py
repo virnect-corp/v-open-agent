@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from voa.server.__main__ import main, uvicorn_options
 from voa.server.app import create_app
 from voa.server.devices import load_devices
+from voa.server.logconfig import server_log_config
 from voa.server.settings import Settings
 
 SERVER = Path(__file__).resolve().parents[2]
@@ -179,7 +180,8 @@ def test_importing_the_app_module_does_not_start_or_read_config(
 
 def test_uvicorn_options_dev_and_pilot(tmp_path: Path) -> None:
     dev = uvicorn_options(settings(tmp_path, BIND="127.0.0.1", PORT="9000"))
-    assert dev == {"host": "127.0.0.1", "port": 9000}
+    logging_options = {"log_config": server_log_config(), "access_log": False}
+    assert dev == {"host": "127.0.0.1", "port": 9000, **logging_options}
     cert, key = tmp_path / "c.pem", tmp_path / "k.pem"
     cert.write_text("c", encoding="utf-8")
     key.write_text("k", encoding="utf-8")
@@ -194,6 +196,7 @@ def test_uvicorn_options_dev_and_pilot(tmp_path: Path) -> None:
         )
     )
     assert pilot == {
+        **logging_options,
         "host": "0.0.0.0",
         "port": 8765,
         "ssl_certfile": str(cert),
@@ -220,4 +223,75 @@ def test_main_starts_uvicorn_with_the_app_path(
     calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
     monkeypatch.setattr("voa.server.__main__.uvicorn.run", lambda *a, **k: calls.append((a, k)))
     assert main() == 0
-    assert calls == [(("voa.server.app:app",), {"host": "127.0.0.1", "port": 9123})]
+    assert calls == [
+        (
+            ("voa.server.app:app",),
+            {
+                "host": "127.0.0.1",
+                "port": 9123,
+                "log_config": server_log_config(),
+                "access_log": False,
+            },
+        )
+    ]
+
+
+# --- TASK-28 log hardening (SPEC 8.2, DAT-02) ---
+
+
+def test_main_uses_the_json_allowlist_log_config(tmp_path: Path) -> None:
+    import logging.config
+
+    from voa.server.logconfig import SERVER_LOGGERS, server_log_config
+    from voa.storage.logging import JsonLogFormatter
+
+    options = uvicorn_options(settings(tmp_path))
+    assert options["access_log"] is False
+    config = options["log_config"]
+    assert config == server_log_config()
+    assert config["disable_existing_loggers"] is False
+    assert set(config["loggers"]) == set(SERVER_LOGGERS)
+    assert all(entry["level"] == "INFO" for entry in config["loggers"].values())
+    logging.config.dictConfig(config)
+    try:
+        handler = logging.getLogger("uvicorn.error").handlers[0]
+        assert isinstance(handler.formatter, JsonLogFormatter)
+    finally:
+        for name in SERVER_LOGGERS:
+            logger = logging.getLogger(name)
+            logger.handlers.clear()
+            logger.propagate = True
+            logger.setLevel(logging.NOTSET)
+
+
+def test_unstructured_records_get_the_logger_name_as_event() -> None:
+    import logging
+
+    from voa.server.logconfig import LoggerEventFilter
+    from voa.storage.logging import JsonLogFormatter
+
+    record = logging.LogRecord("uvicorn.error", logging.ERROR, "f", 1, "boom %s", ("tok",), None)
+    assert LoggerEventFilter().filter(record)
+    assert JsonLogFormatter().format(record) == '{"event":"uvicorn.error"}'
+    structured = logging.LogRecord("voa.x", logging.INFO, "f", 1, "", None, None)
+    structured.__dict__["event"] = "late_ack"
+    LoggerEventFilter().filter(structured)
+    assert structured.__dict__["event"] == "late_ack"
+
+
+@pytest.mark.parametrize("before", [0, 5, 10, 20, 30])  # NOTSET, TRACE, DEBUG, INFO, WARNING
+def test_pin_log_levels_raises_to_info_but_never_lowers(before: int) -> None:
+    import logging
+
+    from voa.server.logconfig import SERVER_LOGGERS, pin_log_levels
+
+    saved = {name: logging.getLogger(name).level for name in SERVER_LOGGERS}
+    try:
+        for name in SERVER_LOGGERS:
+            logging.getLogger(name).setLevel(before)
+        pin_log_levels()
+        for name in SERVER_LOGGERS:
+            assert logging.getLogger(name).level == max(before, logging.INFO)
+    finally:
+        for name, level in saved.items():
+            logging.getLogger(name).setLevel(level)

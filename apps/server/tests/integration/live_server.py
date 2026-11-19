@@ -5,8 +5,10 @@ import socket
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import uvicorn
+from uvicorn.config import LOGGING_CONFIG
 
 from voa.server.app import create_app
 from voa.server.settings import Settings
@@ -36,8 +38,17 @@ def make_workdir(workdir: Path) -> Path:
 class LiveServer:
     """uvicorn in a thread; `start` after `stop` brings up fresh process state on the same port."""
 
-    def __init__(self, workdir: Path, env: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        workdir: Path,
+        env: dict[str, str] | None = None,
+        *,
+        log_level: str = "info",
+        log_config: dict[str, Any] | None = None,
+    ) -> None:
         self.port = free_port()
+        self.log_level = log_level
+        self.log_config = log_config
         self.settings = Settings.from_env(
             {
                 "VOA_HEARTBEAT_MS": str(HEARTBEAT_MS),
@@ -60,7 +71,8 @@ class LiveServer:
             app,
             host="127.0.0.1",
             port=self.port,
-            log_level="info",  # uvicorn's default operating level (DEBUG dumps WS frames)
+            log_level=self.log_level,
+            log_config=LOGGING_CONFIG if self.log_config is None else self.log_config,
             lifespan="on",
             timeout_graceful_shutdown=1,
         )
