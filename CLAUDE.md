@@ -30,6 +30,7 @@
   scripts/dev.sh                             # 전체 검사 = 컨테이너에서 scripts/check.sh
   scripts/dev.sh pytest -q apps/server/tests/contracts  # 임의 명령
   docker compose --profile server up server  # 서버 실행 (TASK-16 이후), http://127.0.0.1:8765
+  scripts/vision.sh pytest -q -m model apps/server/tests/contracts/test_rtdetr_provider.py  # Stage C0 실모델 (ADR-0007)
   ```
 - `dev` 서비스는 `network_mode: none`이다. 테스트는 네트워크 없이 통과해야 한다.
 - 실모델 테스트는 `@pytest.mark.model`로 표시하고 기본 실행에서 제외한다.

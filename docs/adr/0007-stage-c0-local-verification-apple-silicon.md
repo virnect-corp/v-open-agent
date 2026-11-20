@@ -1,6 +1,6 @@
 # ADR-0007: Stage C0 - Apple Silicon 로컬에서 실모델 경로를 검증한다
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-19
 - Owners: Provider/Replay, Verification
 - Related: INP-03, INP-05, NFR-02, NFR-03, T-R14, OQ-01, OQ-04, OQ-06, OQ-08, ADR-0004, SPEC §7.4, §9
@@ -58,7 +58,7 @@ Stage C0는 로컬 검증 단계다. 실행 환경은 Docker Linux arm64, **CPU 
 
 - 장점: 계약, 엔진, 서버를 바꾸지 않고 실모델 출력으로 경고 경로와 지연을 측정할 수 있다. 기본 개발 환경과 검사는 그대로다.
 - 비용: `vision` 이미지가 커진다(torch CPU 포함). CPU 추론이라 처리 가능한 fps가 낮을 수 있다. 실시간 데모는 없다.
-- 라이선스: Pillow의 SPDX는 `MIT-CMU`다. SPEC §9.1의 허용 목록(MIT, Apache-2.0, BSD-2/3-Clause, ISC, 0BSD)에 없어서, 구현 Task에서 허용 목록에 `MIT-CMU`를 추가하는 SPEC 변경이 필요하다.
+- 라이선스: Pillow의 SPDX는 `MIT-CMU`다. 2026-11-20 소유자 승인으로 SPEC §9.1 허용 목록에 `MIT-CMU`를 추가했다(TASK-29).
 - 되돌림: `vision` 그룹, Provider 모듈, C0 profile과 manifest를 지우면 Stage B 상태로 돌아간다.
 
 ## Verification

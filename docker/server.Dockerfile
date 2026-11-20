@@ -35,6 +35,18 @@ ENV PYTHONPATH=/workspace/apps/server/src
 USER voa
 WORKDIR /workspace
 
+# Stage C0 실모델 검증 이미지 (ADR-0007): dev + 선택 그룹 vision. 가중치는 포함하지 않는다.
+# torch는 CPU 빌드를 받는다(Docker Desktop for Mac 컨테이너는 GPU를 쓰지 못한다).
+FROM dev AS vision-dev
+USER root
+COPY apps/server/pyproject.toml /tmp/pyproject.toml
+RUN python -c "import tomllib; v = tomllib.load(open('/tmp/pyproject.toml', 'rb'))['project']['optional-dependencies']['vision']; open('/tmp/torch.txt', 'w').write('\n'.join(r for r in v if r.startswith('torch'))); open('/tmp/rest.txt', 'w').write('\n'.join(r for r in v if not r.startswith('torch')))" \
+ && pip install --index-url https://download.pytorch.org/whl/cpu -r /tmp/torch.txt \
+ && pip install -r /tmp/rest.txt \
+ && rm /tmp/torch.txt /tmp/rest.txt /tmp/pyproject.toml
+USER voa
+WORKDIR /workspace
+
 FROM base AS server
 RUN python -c "import tomllib; p = tomllib.load(open('/tmp/pyproject.toml', 'rb'))['project']; o = p.get('optional-dependencies', {}); print('\n'.join(p['dependencies'] + o.get('server', [])))" > /tmp/requirements.txt \
  && pip install -r /tmp/requirements.txt \

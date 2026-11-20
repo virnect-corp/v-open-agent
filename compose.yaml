@@ -21,6 +21,25 @@ services:
     network_mode: none
     command: ["scripts/check.sh"]
 
+  # Stage C0 실모델 검증 (ADR-0007). `scripts/vision.sh <command>`
+  # - dev 이미지 + vision 그룹(torch CPU, transformers, Pillow). 네트워크 없음, 다운로드 금지.
+  # - 가중치는 사용자가 apps/server/var/models/<model_id>/ 에 직접 받아 둔다(git 제외).
+  vision:
+    profiles: ["vision"]
+    image: v-open-agent:vision-dev
+    build:
+      <<: *server-build
+      target: vision-dev
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    network_mode: none
+    environment:
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      VOA_MODEL_WEIGHTS_DIR: /workspace/apps/server/var/models
+    command: ["bash"]
+
   # 서버 실행 (SPEC 8.4). `docker compose --profile server up server`
   # - 의존성은 이미지에, 소스는 저장소 bind mount(/workspace)로 쓴다. 소스 수정은 재빌드 없이 반영.
   # - 모델: 가중치 폴더를 /models 에 읽기 전용으로 마운트하고, profile/manifest 는 환경변수로 고른다.

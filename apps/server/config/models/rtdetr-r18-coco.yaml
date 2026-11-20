@@ -1,0 +1,15 @@
+# Stage C0 local verification detector (ADR-0007). RT-DETR R18 trained on COCO 2017.
+# Weights are not in the repository: download PekingU/rtdetr_r18vd at this revision into
+# var/models/rtdetr-r18-coco/ yourself. The provider checks model.safetensors against sha256
+# before loading and never downloads. Only `person` is emitted in C0.
+model_id: rtdetr-r18-coco
+revision: ac77a11ff0170a41b771c03264987f8ce2b0d753
+kind: object_detection
+labels: [person]
+weights: file
+sha256: fe87a5a30f5daf298d10794c7682a63b6107986f97d6a770ba948d89e4340093
+license: Apache-2.0
+license_evidence_url: https://huggingface.co/PekingU/rtdetr_r18vd
+redistribution_allowed: true
+reviewed_at: 2026-11-20
+reviewer: voa-maintainers
