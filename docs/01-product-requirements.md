@@ -209,10 +209,10 @@ MVP-1 개발에 필요한 계약값은 SPEC에 확정한다. 아래 항목은 �
 
 | ID | 질문 | 현재 가정 | 영향 REQ | 결정 시점 |
 |---|---|---|---|---|
-| OQ-01 | 첫 대상 환경 | 미정. 후보: 철판/벽 균열, 벽 손상, 화재, 연기. OQ-08 모델 조사 결과를 보고 결정. MVP-1 fixture는 실내 통로 시나리오 유지 | ENG 시나리오 | Stage C 전 |
+| OQ-01 | 첫 대상 환경 | 미정. 후보: 철판/벽 균열, 벽 손상, 화재, 연기. OQ-08 모델 조사 결과를 보고 결정. MVP-1 fixture는 실내 통로 시나리오 유지. Stage C0 로컬 검증은 제품 시나리오가 아닌 COCO `person` 탐지 시나리오로 진행(ADR-0007) | ENG 시나리오 | Stage C 전 |
 | OQ-02 | 글래스 기종, SDK, 카메라 원본 접근 가능 여부 | 시뮬레이터 | COM, INP | Stage F 전 |
 | OQ-03 | Wi-Fi/IMU 제공 여부 | Wi-Fi O, IMU 선택 | ENG-04 | Stage F 실기기 어댑터 전 |
-| OQ-04 | GPU/VRAM 사양 | 미정, 1 stream | INP-03, NFR-03 | Stage C 전 |
+| OQ-04 | GPU/VRAM 사양 | 개발/검증: Apple M1, Docker Linux arm64 CPU 전용(컨테이너는 Metal GPU 미접근, ADR-0007). pilot GPU는 미정, 1 stream | INP-03, NFR-03 | Stage C 전 |
 | OQ-05 | 경고 출력 수단 (음성, HUD, 진동) | 텍스트+음성 | COM-03 | Stage D 전 |
 | OQ-06 | 운영 임계값과 정답 데이터 | 테스트 값만 | ENG-06/07 | Stage C |
 | OQ-07 | 서버 OS, 배포 형태 | Linux x86_64 / macOS 개발 | NFR-01 | pilot 배포 전 |

@@ -627,6 +627,8 @@ OutputCap = Literal["hud", "speaker", "haptic"]
 | `speaker` | 장치 내장 TTS로 `text`를 읽음. TTS가 없으면 고정 경고음 | `text`를 1회 읽음 |
 | `haptic` | 진동 패턴 A (장치 정의) | 진동 패턴 B |
 
+- Stage C0(ADR-0007)에서는 예외로 시뮬레이터가 로컬 프레임 폴더를 읽어 장치 쪽에서 detector Provider를 실행하고 기존 `observation` 메시지로 보낸다. 서버 Provider와 `frame` 메시지는 Stage C1 이후에 확정한다.
+
 - **TTS는 장치에서 한다.** 서버는 텍스트만 보내고 오디오는 생성하지 않는다(서버 TTS는 MVP 범위 밖).
 - **ACK 정의**
   - `received`: 메시지를 파싱하고 alert_id 중복 검사를 마친 직후
@@ -752,6 +754,7 @@ VOA_MODEL_AUTO_DOWNLOAD=false
 | 용도 | 후보 | 라이선스 상태 |
 |---|---|---|
 | 객체 탐지 | YOLOX-Nano/Tiny | 코드 Apache-2.0 / 체크포인트 `review_required` |
+| Stage C0 검증 탐지 (ADR-0007) | RT-DETR R18 COCO (`PekingU/rtdetr_r18vd`), CPU 추론 | 모델 카드 Apache-2.0 / COCO 데이터 라이선스 `review_required` |
 | open-vocabulary 탐지 (ADR-0004) | OmDet-Turbo swin-tiny (기본), OWLv2 base, Grounding DINO tiny | 모델 카드 Apache-2.0 / 원문 `review_required` |
 | 미세조정 탐지 (ADR-0004) | RT-DETR, RF-DETR (Apache-2.0 크기만, `rfdetr[plus]`와 PML 크기 제외) | 모델 카드/저장소 Apache-2.0 / 학습 데이터셋 라이선스 별도 `review_required` |
 | 추적 | ByteTrack | MIT 후보 / `review_required` |
