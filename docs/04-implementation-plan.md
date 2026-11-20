@@ -94,6 +94,18 @@ TASK-15 검증 (2026-11-10): 네트워크 차단 Docker 개발 컨테이너에�
 | E VLM 설명 | 확정된 결정만 입력, claim+evidence_ids 구조화 출력, §6 validator, 타임아웃 폴백, unsupported claim rate 측정 | EXP-03, T-R09 | OQ-04 |
 | F Android 클라이언트 및 실기기 | `05-android-client-plan.md`의 Android 참조 클라이언트, 기종별 어댑터, TLS 및 등록 운영, 배터리, 열, 끊김 측정 | COM, DEV, DAT-04 | OQ-02, OQ-03 |
 
+### 4.1 Stage C0 — Apple Silicon 로컬 실모델 검증 (ADR-0007)
+
+목적은 실모델 출력이 프레임 → Provider → 엔진 → alert → ACK 경로를 통과하는지와 그때의 지연을 측정하는 것이다. 정확도 목표는 없다. 실행 환경은 Docker Linux arm64 CPU 전용이고, 시나리오는 COCO `person` 탐지 전용 `person_in_walkway`(profile `local_verify_c0`)다.
+
+| Task | 제목 | REQ | 산출물 (SPEC 절) | 수용 테스트 | 선행 | 상태 |
+|---|---|---|---|---|---|---|
+| TASK-29 | vision 의존성과 RT-DETR Provider | INP-03, INP-05 | `apps/server/pyproject.toml` 선택 그룹 `vision`(torch, transformers, Pillow), §9.1 등록부와 허용 목록(`MIT-CMU`), `docker/server.Dockerfile` `vision-dev` target과 compose 서비스, `apps/server/src/voa/providers/rtdetr.py`, `apps/server/config/models/rtdetr-r18-coco.yaml`, `apps/server/config/profiles/local_verify_c0.yaml` (§9, ADR-0007) | 가짜 모델로 label 필터, bbox 정규화, 하한 점수, Draft 스키마, `model` 출처 검증. `vision` 미설치 시 명확한 오류. `scripts/check.sh`는 `vision` 없이 통과. `@pytest.mark.model`: 사용자가 받은 가중치의 sha256 대조 후 추론 1회 | B 게이트 | TODO |
+| TASK-30 | 프레임 폴더 입력과 오프라인 평가 러너 | NFR-02, NFR-03, T-R14 | `apps/server/src/voa/simulator/frames.py`(읽기 전용 프레임 소스, `--fps`), `apps/server/src/voa/eval/__main__.py`(프레임 → Provider → 엔진, 결정 JSONL, PLAN §4 형식 보고서) | 파일 이름 순서와 프레임 시각 결정론, 실행 중 파일 생성 0건, 손상 이미지는 건너뛰고 계수, 빈 폴더 오류, Provider/step p50/p95 출력, 정답 없을 때 recall/FP/hour `TBD` | 29 | TODO |
+| TASK-31 | 시뮬레이터 실모델 모드 | INP-01, COM-02 | `python -m voa.simulator --frames DIR --fps N --model rtdetr-r18-coco`, 프레임 → Provider → `observation` 전송 | 가짜 Provider로 uvicorn E2E(경고, ACK), 추론이 프레임 간격보다 느리면 밀린 프레임을 건너뛰고 계수, `vision` 미설치 시 exit 2 | 29, 30 | TODO |
+
+**Stage C0 완료 기준**: 사용자가 준비한 프레임 폴더로 평가 러너와 시뮬레이터 실모델 모드가 동작하고, M1 Docker CPU에서 측정한 Provider 추론 p50/p95와 경고 지연이 보고서로 남는다.
+
 평가 보고 형식(Stage C~): `run_id, code_commit, profile, model_artifacts{id,revision,sha256}, hardware, dataset, metrics{event_recall, false_alerts_per_hour, e2e_p95_ms, unknown_rate, unsupported_claim_rate}, limitations`. 측정하지 않은 값은 `TBD`로 둔다.
 
 ---
