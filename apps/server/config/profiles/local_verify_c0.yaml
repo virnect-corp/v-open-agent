@@ -1,0 +1,27 @@
+# Stage C0 local verification profile (ADR-0007). Infrastructure check with a real
+# COCO detector, not a product scenario: a person seen in the walkway ROI.
+# Thresholds are verification defaults and are revisited with OQ-06.
+profile_id: local_verify_c0
+profile_version: 1
+degraded_notice_text: "카메라 상태를 확인할 수 없어 감지가 제한됩니다."
+params:
+  min_score: 0.5
+  roi_min_overlap: 0.3
+  confirm_frames: 3
+  clear_frames: 3
+  staleness_ms: 1000
+  unknown_after_ms: 1500
+  warning_ttl_ms: 4000
+  window_ms: 5000
+  window_max_items: 256
+scenarios:
+  - id: person_in_walkway
+    required_kinds: [object_detection]
+    required_models: {object_detection: rtdetr-r18-coco}
+    required_streams: [camera_0]
+    labels: [person]
+    motion_classes: []
+    roi: [0.20, 0.30, 0.80, 1.00]
+    blocking_flags: [occluded, frame_dropped]
+    warning_text: "전방 통로에 사람이 있습니다."
+    severity: attention

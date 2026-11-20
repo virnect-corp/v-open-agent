@@ -20,6 +20,26 @@ from voa.contracts.observation import (
 from voa.engine.ports import FixedEpochClock
 from voa.providers.base import ObservationProvider
 from voa.providers.mock import MockVisionProvider
+from voa.providers.rtdetr import Frame, RawDetection, RtDetrProvider
+
+
+class ListDetector:
+    """RT-DETR stand-in: the "image" is the list of pixel detections it contains."""
+
+    def detect(self, image: object) -> tuple[int, int, list[RawDetection]]:
+        assert isinstance(image, list)
+        return 640, 480, image
+
+
+def _rtdetr() -> RtDetrProvider:
+    return RtDetrProvider(
+        ListDetector(), model_id="rtdetr-r18-coco", revision="r", labels=["person"]
+    )
+
+
+def _image_frame(i: int, people: int) -> Frame:
+    found = [RawDetection("person", 0.9, (100.0, 100.0, 300.0, 400.0))] * people
+    return Frame(frame_id=f"f{i}", capture_ts_monotonic_ns=i * 100_000_000, image=found)
 
 
 @dataclass
@@ -81,6 +101,12 @@ PROVIDERS = {
         items=[_frame(0, [PERSON]), _frame(1, [PERSON]), _frame(2)],
         empty=_frame(7),
         invalid={"frame_id": "f0", "objects": [{"label": "x", "bbox": [0.5, 0.5, 0.1, 0.1]}]},
+    ),
+    "rtdetr_fake_detector": Case(
+        make=_rtdetr,
+        items=[_image_frame(0, 1), _image_frame(1, 2), _image_frame(2, 0)],
+        empty=_image_frame(7, 0),
+        invalid={"frame_id": "f0"},
     ),
     "label_list_double": Case(
         make=LabelListDouble,

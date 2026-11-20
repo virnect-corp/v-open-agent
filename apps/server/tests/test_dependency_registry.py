@@ -11,7 +11,15 @@ import pytest
 SERVER_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = Path(__file__).resolve().parents[3]
 REGISTRY_HEADING = "### 9.1 Python dependency registry"
-PERMISSIVE_LICENSES = {"MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "0BSD"}
+PERMISSIVE_LICENSES = {
+    "MIT",
+    "MIT-CMU",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "0BSD",
+}
 
 
 @dataclass(frozen=True)

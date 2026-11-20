@@ -27,6 +27,12 @@ server = [
     "uvicorn>=0.29",
     "websockets>=13",  # uvicorn WebSocket protocol, simulator client asyncio API (SPEC 7.2)
 ]
+# Stage C0 real detector (ADR-0007). Optional: not in the dev/server images; use scripts/vision.sh.
+vision = [
+    "torch>=2.2",  # CPU build in the vision-dev image
+    "transformers>=4.45,<5",  # RTDetrForObjectDetection / RTDetrImageProcessor
+    "Pillow>=10",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/voa"]
@@ -46,6 +52,11 @@ python_version = "3.11"
 files = ["src", "tests"]
 mypy_path = "src"
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+# Optional `vision` group: absent from the default dev image (ADR-0007).
+module = ["torch", "torch.*", "transformers", "transformers.*", "PIL", "PIL.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
