@@ -11,7 +11,7 @@
 문서끼리 충돌하거나 명세에 없는 결정(라이브러리, 임계값, 필드)이 필요하면 **구현을 멈추고** 충돌 지점과 선택지를 제시한다.
 
 ## 2. 현재 상태
-- Stage A(TASK-01~15A), Stage A+(TASK-24~26), Stage B(TASK-16~23, 27, 28), Stage B 게이트(MVP-1), Stage C0(TASK-29~32, ADR-0007, 로컬 CPU 실모델 검증) 완료. 다음은 Stage C(실 Vision) 진입 결정이다. 진입 전에 OQ-01(첫 대상 시나리오), OQ-08(후보 모델과 데이터셋, 라이선스 포함), OQ-04, OQ-06을 결정하고 SPEC을 먼저 확장한 뒤 Task로 세분화한다(PLAN §4). 실행 환경은 Docker(§4)이고 진행 상황은 `docs/04-implementation-plan.md`의 상태 열이 기준이다.
+- Stage A(TASK-01~15A), Stage A+(TASK-24~26), Stage B(TASK-16~23, 27, 28), Stage B 게이트(MVP-1), Stage C0(TASK-29~32, ADR-0007, 로컬 CPU 실모델 검증) 완료. 첫 실제 시나리오는 화재로 결정했고(ADR-0008, OQ-01, OQ-08), 다음은 Stage C1(PLAN §4.2, TASK-33부터)이다. 학습 GPU가 정해질 때까지 TASK-38은 대기다(OQ-04). 실행 환경은 Docker(§4)이고 진행 상황은 `docs/04-implementation-plan.md`의 상태 열이 기준이다.
 - 실제로 파일을 만들고 명령을 실행하기 전에는 "테스트가 통과한다"고 말하지 않는다.
 
 ## 3. 슬래시 명령
