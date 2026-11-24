@@ -53,7 +53,12 @@ def write(tmp_path: Path, name: str, text: str) -> Path:
 
 def test_default_mock_manifests_load() -> None:
     loaded = manifests()
-    assert sorted(loaded) == ["mock-detector", "mock-tracker", "rtdetr-r18-coco"]
+    assert sorted(loaded) == [
+        "mock-detector",
+        "mock-tracker",
+        "omdet-turbo-fire",
+        "rtdetr-r18-coco",
+    ]
     detector, tracker = loaded["mock-detector"], loaded["mock-tracker"]
     assert (detector.kind, detector.labels, detector.weights) == (
         "object_detection",

@@ -1,0 +1,16 @@
+# Stage C1a zero-shot fire detector (ADR-0008). OmDet-Turbo swin-tiny, open-vocabulary:
+# the labels below are the text prompts. Weights are not in the repository: download
+# omlab/omdet-turbo-swin-tiny-hf at this revision into var/models/omdet-turbo-fire/
+# yourself. model.safetensors is checked against sha256 before loading; nothing is
+# downloaded. Zero-shot output is for exploration, not an accuracy claim.
+model_id: omdet-turbo-fire
+revision: 7fe93cecfb770c4d76cf71163956221249cab566
+kind: object_detection
+labels: [fire, smoke]
+weights: file
+sha256: 439d1575d7e237ad565ed6969ea2a2dfcedf2086155e9ca3ac96cd6180a48cfd
+license: Apache-2.0
+license_evidence_url: https://huggingface.co/omlab/omdet-turbo-swin-tiny-hf
+redistribution_allowed: true
+reviewed_at: 2026-11-24
+reviewer: voa-maintainers

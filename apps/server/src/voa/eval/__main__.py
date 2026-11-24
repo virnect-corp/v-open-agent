@@ -22,11 +22,11 @@ from voa.config.model_registry import check_profile_models, load_manifests
 from voa.config.profile_loader import load_profile
 from voa.engine.profile import PolicyProfile, ProfileError
 from voa.eval.runner import run_eval
+from voa.providers.detectors import load_detector
 from voa.providers.rtdetr import (
     DEFAULT_SCORE_FLOOR,
     VisionUnavailable,
     WeightsError,
-    load_rtdetr,
 )
 from voa.simulator.frames import FramesError, FrameSource
 
@@ -84,7 +84,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     manifest = manifests[model_ids[0]]
 
     try:
-        provider = load_rtdetr(manifest, Path(args.weights_dir), score_floor=args.score_floor)
+        provider = load_detector(manifest, Path(args.weights_dir), score_floor=args.score_floor)
     except (WeightsError, VisionUnavailable, ValueError) as error:
         return _fail(str(error))
 

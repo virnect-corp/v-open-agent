@@ -3,7 +3,8 @@
     python -m voa.simulator --fixture contracts/fixtures/scenarios/uc01_obstacle.jsonl \
         --server http://127.0.0.1:8765 --device dev_fixture --outputs hud,speaker
 
-Stage C0 (ADR-0007): `--frames DIR --fps N [--model rtdetr-r18-coco]` runs the detector
+Stage C0/C1 (ADR-0007, ADR-0008): `--frames DIR --fps N [--model rtdetr-r18-coco |
+omdet-turbo-fire]` runs the detector
 here on each image frame (worker thread, late frames skipped) and sends the Drafts;
 frame counters and provider latency go to stderr. Needs the `vision` group and local
 weights (`scripts/vision.sh`); the server must run a profile that requires that model.
@@ -25,11 +26,11 @@ from pathlib import Path
 from typing import cast, get_args
 
 from voa.config.model_registry import load_manifests
+from voa.providers.detectors import load_detector
 from voa.providers.rtdetr import (
     DEFAULT_SCORE_FLOOR,
     VisionUnavailable,
     WeightsError,
-    load_rtdetr,
 )
 from voa.simulator.adapter import ClientConfig, FramePlayStats, GlassClient, SessionRejected
 from voa.simulator.fixture import FixtureError, load_drafts
@@ -124,7 +125,7 @@ def _frames_player(args: argparse.Namespace) -> Player | int:
     if not isinstance(manifests, dict) or args.model not in manifests:
         return _fail("model manifest not found")
     try:
-        provider = load_rtdetr(
+        provider = load_detector(
             manifests[args.model], Path(args.weights_dir), score_floor=args.score_floor
         )
     except (WeightsError, VisionUnavailable, ValueError) as error:

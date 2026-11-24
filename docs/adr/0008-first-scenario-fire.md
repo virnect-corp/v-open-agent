@@ -65,3 +65,9 @@
 - 데이터 준비 도구는 합성 YOLO 라벨 폴더로 `PublicDataset` 기본 제외와 분할 결정론을 검사한다.
 - 실모델 테스트는 `@pytest.mark.model`이고 기본 실행에서 제외한다.
 - 평가 보고서는 PLAN §4 형식이고 측정하지 않은 값은 `TBD`다.
+
+## Results (2026-11-24, TASK-33)
+
+- OmDet-Turbo는 transformers 외에 torchvision(처리기), timm(Swin backbone), safetensors가 필요해 `vision` 그룹과 SPEC §9.1에 추가했다(모두 허용 라이선스). transformers `from_pretrained`의 meta 초기화가 timm Swin의 `attn_mask` 버퍼를 `meta`에 남겨, config로 CPU에서 모델을 만든 뒤 가중치를 strict로 불러온다.
+- 화재 없는 사무실 영상 `walk01`(3fps, 98장): 제로샷 모델이 흰 벽과 천장 조명 영역을 `fire` 0.29~0.38점으로 매 프레임 검출했다. `min_score` 0.3에서는 처음부터 끝까지 경고였고, 0.45에서는 경고가 없었다. 0.45는 화재 영상 없이 정한 초기값이며 TASK-36에서 화재 영상으로 다시 정한다.
+- Provider 추론(M1, Docker CPU): p50 1051 ms, p95 1125 ms(n=98). RT-DETR R18(약 300 ms)의 약 3.5배라 실시간 처리는 약 1fps다.

@@ -30,8 +30,11 @@ server = [
 # Stage C0 real detector (ADR-0007). Optional: not in the dev/server images; use scripts/vision.sh.
 vision = [
     "torch>=2.2",  # CPU build in the vision-dev image
+    "torchvision>=0.17",  # CPU build; OmDet-Turbo processor (ADR-0008)
     "transformers>=4.45,<5",  # RTDetrForObjectDetection / RTDetrImageProcessor
     "Pillow>=10",
+    "timm>=1.0",  # OmDet-Turbo Swin backbone (ADR-0008)
+    "safetensors>=0.4",  # OmDet-Turbo strict weight load (ADR-0008)
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -55,7 +58,9 @@ plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
 # Optional `vision` group: absent from the default dev image (ADR-0007).
-module = ["torch", "torch.*", "transformers", "transformers.*", "PIL", "PIL.*"]
+module = [
+    "torch", "torch.*", "transformers", "transformers.*", "PIL", "PIL.*", "safetensors", "safetensors.*",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
