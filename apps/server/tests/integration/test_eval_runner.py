@@ -22,6 +22,7 @@ SERVER = Path(__file__).resolve().parents[2]
 PROFILE = SERVER / "config" / "profiles" / "local_verify_c0.yaml"
 SCENARIO = "person_in_walkway"
 PERSON_BOX = (200.0, 200.0, 440.0, 470.0)  # inside the C0 walkway ROI on 640x480
+COAT_BOX = (45.0, 310.0, 235.0, 480.0)  # walk01: a coat on a chair, half inside the ROI
 
 
 def decode(data: bytes) -> list[RawDetection]:
@@ -30,6 +31,10 @@ def decode(data: bytes) -> list[RawDetection]:
         return [RawDetection("person", 0.9, PERSON_BOX)]
     if data == b"empty":
         return []
+    if data == b"coat":  # a still object the detector takes for a person (walk01)
+        return [RawDetection("person", 0.65, COAT_BOX)]
+    if data == b"coat+person":
+        return [RawDetection("person", 0.65, COAT_BOX), RawDetection("person", 0.9, PERSON_BOX)]
     raise ValueError("corrupt")
 
 
@@ -176,6 +181,21 @@ def test_ticks_between_frames_do_not_disturb_a_normal_rate(tmp_path: Path) -> No
     decisions, report = run(folder)
     assert [json.loads(d)["state"] for d in decisions].count("warning") == 1
     assert report.measurements["alerts"] == 1
+
+
+def test_still_object_below_min_score_never_warns_but_a_person_still_does(
+    tmp_path: Path,
+) -> None:
+    """TASK-32: on walk01 a coat in the ROI scored up to 0.65 as `person` and warned at
+    min_score 0.5. Profile v2 (0.7) ignores it; a real person (0.9) still warns once."""
+    folder = frames_dir(tmp_path, [b"coat"] * 10 + [b"coat+person"] * 4 + [b"coat"] * 6)
+    decisions, report = run(folder)
+    states = [json.loads(d)["state"] for d in decisions]
+    assert states.count("warning") == 1
+    assert report.measurements["alerts"] == 1
+    first_warning = next(json.loads(d) for d in decisions if json.loads(d)["state"] == "warning")
+    assert first_warning["decided_at_utc"] >= "2026-11-09T00:00:02"  # not before the person
+    assert profile().params.min_score == 0.7
 
 
 # --- CLI ---
