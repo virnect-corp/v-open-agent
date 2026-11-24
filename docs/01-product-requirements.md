@@ -209,14 +209,14 @@ MVP-1 개발에 필요한 계약값은 SPEC에 확정한다. 아래 항목은 �
 
 | ID | 질문 | 현재 가정 | 영향 REQ | 결정 시점 |
 |---|---|---|---|---|
-| OQ-01 | 첫 대상 환경 | 미정. 후보: 철판/벽 균열, 벽 손상, 화재, 연기. OQ-08 모델 조사 결과를 보고 결정. MVP-1 fixture는 실내 통로 시나리오 유지. Stage C0 로컬 검증은 제품 시나리오가 아닌 COCO `person` 탐지 시나리오로 진행(ADR-0007) | ENG 시나리오 | Stage C 전 |
+| OQ-01 | 첫 대상 환경 | **결정(2026-11-24, ADR-0008)**: 화재(화염), 시나리오 `fire_in_view`. 연기는 label로만 기록하고 시나리오는 오탐 측정 후 결정. 균열은 2순위, 벽 손상은 제외. MVP-1 fixture는 실내 통로 시나리오 유지. Stage C0는 COCO `person` 검증 시나리오(ADR-0007) | ENG 시나리오 | 결정됨 |
 | OQ-02 | 글래스 기종, SDK, 카메라 원본 접근 가능 여부 | 시뮬레이터 | COM, INP | Stage F 전 |
 | OQ-03 | Wi-Fi/IMU 제공 여부 | Wi-Fi O, IMU 선택 | ENG-04 | Stage F 실기기 어댑터 전 |
-| OQ-04 | GPU/VRAM 사양 | 개발/검증: Apple M1, Docker Linux arm64 CPU 전용(컨테이너는 Metal GPU 미접근, ADR-0007). pilot GPU는 미정, 1 stream | INP-03, NFR-03 | Stage C 전 |
+| OQ-04 | GPU/VRAM 사양 | 개발/검증: Apple M1, Docker Linux arm64 CPU 전용(컨테이너는 Metal GPU 미접근, ADR-0007). 미세조정 학습 GPU 환경은 미정이며 소유자가 확보 시 결정(ADR-0008, TASK-38). pilot GPU는 미정, 1 stream | INP-03, NFR-03 | Stage C1b 전 |
 | OQ-05 | 경고 출력 수단 (음성, HUD, 진동) | 텍스트+음성 | COM-03 | Stage D 전 |
 | OQ-06 | 운영 임계값과 정답 데이터 | 테스트 값만 | ENG-06/07 | Stage C |
 | OQ-07 | 서버 OS, 배포 형태 | Linux x86_64 / macOS 개발 | NFR-01 | pilot 배포 전 |
-| OQ-08 | 시나리오별 후보 모델과 데이터셋 (코드/가중치/데이터 라이선스 포함) | 미정. Hugging Face 오픈 모델과 Roboflow Universe 등 공개 데이터셋을 조사 | INP-05, NFR-04 | Stage C 전 |
+| OQ-08 | 시나리오별 후보 모델과 데이터셋 (코드/가중치/데이터 라이선스 포함) | **화재 결정(ADR-0008)**: 데이터 D-Fire(CC0 1.0, `PublicDataset` 접두 이미지 기본 제외), 모델 C1a OmDet-Turbo 제로샷(탐색), C1b RT-DETR R18 D-Fire 미세조정(가중치 내부 개발용). 균열 데이터는 허용 라이선스 bbox 세트 없음(자체 수집 필요) | INP-05, NFR-04 | 화재 결정됨 |
 | OQ-09 | 경고 대상 균열 기준과 정답 데이터 (어떤 균열부터 경고하는가) | 미정. 수치(폭/길이) 주장은 보정 근거 전까지 금지 | UC-10, OQ-06 | Stage C |
 | OQ-10 | open-vocabulary 기본 모델 확정 (OmDet-Turbo / OWLv2 / Grounding DINO 중 정확도, 지연, GPU 비용 비교) | OmDet-Turbo 우선 시험 | INP-05, OQ-04 | Stage C 전 |
 | OQ-11 | 미세조정 모델 확정 (RT-DETR vs RF-DETR, bbox vs segmentation) | 같은 데이터로 비교 후 결정 | INP-05, OQ-04 | Stage C |

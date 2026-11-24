@@ -757,6 +757,8 @@ VOA_MODEL_AUTO_DOWNLOAD=false
 | Stage C0 검증 탐지 (ADR-0007) | RT-DETR R18 COCO (`PekingU/rtdetr_r18vd`), CPU 추론 | 모델 카드 Apache-2.0 / COCO 데이터 라이선스 `review_required` |
 | open-vocabulary 탐지 (ADR-0004) | OmDet-Turbo swin-tiny (기본), OWLv2 base, Grounding DINO tiny | 모델 카드 Apache-2.0 / 원문 `review_required` |
 | 미세조정 탐지 (ADR-0004) | RT-DETR, RF-DETR (Apache-2.0 크기만, `rfdetr[plus]`와 PML 크기 제외) | 모델 카드/저장소 Apache-2.0 / 학습 데이터셋 라이선스 별도 `review_required` |
+| 화재 탐지, 제로샷 C1a (ADR-0008) | OmDet-Turbo swin-tiny, 프롬프트 `[fire, smoke]` (`omdet-turbo-fire`) | 모델 카드 Apache-2.0 / 원문 `review_required` |
+| 화재 탐지, 미세조정 C1b (ADR-0008) | RT-DETR R18을 D-Fire로 미세조정 (`rtdetr-r18-dfire`, labels `[fire, smoke]`) | 베이스 Apache-2.0 / D-Fire CC0 1.0(https://github.com/gaiasd/DFireDataset), `PublicDataset` 접두 이미지는 원 제공자 조건이라 기본 제외 / 가중치 내부 개발용 `redistribution_allowed: false` |
 | 추적 | ByteTrack | MIT 후보 / `review_required` |
 | 소리 이벤트 | YAMNet 또는 대체 | `review_required` |
 | 한국어 STT | 소형 오픈 ASR (모델명은 Stage D 진입 시 확정) | `review_required` |
