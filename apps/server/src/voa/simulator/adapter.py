@@ -18,6 +18,7 @@ Tokens and secrets are kept in memory and never logged or printed.
 import asyncio
 import contextlib
 import json
+import math
 import time
 import urllib.error
 import urllib.request
@@ -46,7 +47,9 @@ from voa.contracts.messages import (
     ServerMessage,
 )
 from voa.contracts.observation import HealthPayload, ObservationDraft
+from voa.providers.base import ObservationProvider
 from voa.simulator.fixture import TimedDraft
+from voa.simulator.frames import FrameSource
 from voa.simulator.outputs import OutputName, VirtualOutputs
 from voa.simulator.watchdog import DEFAULT_BACKOFF_S, Backoff, Watchdog
 
@@ -64,6 +67,14 @@ class SessionRejected(Exception):
         super().__init__(f"session rejected: {status} {code or ''}".strip())
         self.status = status
         self.code = code
+
+
+def _percentile_ms(samples: list[int], q: int) -> float | None:
+    """Nearest-rank percentile in ms (same rule as voa.replay); None without samples."""
+    if not samples:
+        return None
+    ordered = sorted(samples)
+    return round(ordered[max(1, math.ceil(q / 100 * len(ordered))) - 1] / 1e6, 1)
 
 
 class _LinkDown(Exception):
@@ -92,6 +103,19 @@ def post_json(url: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         except ValueError:
             payload = {}
         return int(error.code), payload if isinstance(payload, dict) else {}
+
+
+@dataclass(frozen=True)
+class FramePlayStats:
+    """Stage C0 frame playback counters (ADR-0007). Latency is measurement only."""
+
+    total: int  # decoded frames (corrupt files are counted by FrameSource.skipped)
+    sent: int
+    late_skipped: int  # the next frame was already due: a newer frame exists
+    offline_dropped: int  # processed while the link was down; never queued for later
+    corrupt: int
+    provider_ms_p50: float | None
+    provider_ms_p95: float | None
 
 
 @dataclass(frozen=True)
@@ -219,6 +243,47 @@ class GlassClient:
             if row.draft is not None and await self.send_observation(row.draft):
                 sent += 1
         return sent
+
+    async def play_frames(
+        self, source: FrameSource, provider: ObservationProvider
+    ) -> FramePlayStats:
+        """Stage C0: run the detector on each frame at its due time and send the Drafts.
+
+        Decoding and inference run in a worker thread so heartbeats, ACKs and the
+        watchdog keep running during CPU inference. A frame is skipped when the
+        next frame is already due (inference fell behind); only fresh frames are sent.
+        """
+        interval_ns = round(1_000_000_000 / source.fps)
+        start = self.mono_ns()
+        frames = iter(source)
+        total = sent = late = offline = 0
+        provider_ns: list[int] = []
+        while (frame := await asyncio.to_thread(next, frames, None)) is not None:
+            total += 1
+            due_ns = start + frame.capture_ts_monotonic_ns
+            now = self.mono_ns()
+            if now >= due_ns + interval_ns:
+                late += 1
+                continue
+            if due_ns > now:
+                await asyncio.sleep((due_ns - now) / 1e9)
+            started = time.perf_counter_ns()
+            drafts = await asyncio.to_thread(provider.process, frame)
+            provider_ns.append(time.perf_counter_ns() - started)
+            delivered = [await self.send_observation(draft) for draft in drafts]
+            if all(delivered):
+                sent += 1
+            else:
+                offline += 1
+        return FramePlayStats(
+            total=total,
+            sent=sent,
+            late_skipped=late,
+            offline_dropped=offline,
+            corrupt=source.skipped,
+            provider_ms_p50=_percentile_ms(provider_ns, 50),
+            provider_ms_p95=_percentile_ms(provider_ns, 95),
+        )
 
     # --- session ---
 
