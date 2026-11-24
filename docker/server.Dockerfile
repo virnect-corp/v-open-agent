@@ -47,6 +47,15 @@ RUN python -c "import tomllib; v = tomllib.load(open('/tmp/pyproject.toml', 'rb'
 USER voa
 WORKDIR /workspace
 
+# 프레임 추출 도구 (ADR-0007): 사용자의 영상을 이미지 프레임 폴더로 바꿀 때만 쓴다.
+# ffmpeg(Debian 빌드)는 별도 프로그램으로 실행하고 서버/검증 코드와 링크하지 않는다.
+FROM base AS frame-tools
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg \
+ && rm -rf /var/lib/apt/lists/*
+USER voa
+WORKDIR /workspace
+
 FROM base AS server
 RUN python -c "import tomllib; p = tomllib.load(open('/tmp/pyproject.toml', 'rb'))['project']; o = p.get('optional-dependencies', {}); print('\n'.join(p['dependencies'] + o.get('server', [])))" > /tmp/requirements.txt \
  && pip install -r /tmp/requirements.txt \
