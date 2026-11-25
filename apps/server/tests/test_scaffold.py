@@ -19,6 +19,8 @@ SUBPACKAGES = [
     "explain",
     "storage",
     "server",
+    "eval",
+    "train",
 ]
 
 

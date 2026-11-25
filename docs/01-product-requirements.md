@@ -212,7 +212,7 @@ MVP-1 개발에 필요한 계약값은 SPEC에 확정한다. 아래 항목은 �
 | OQ-01 | 첫 대상 환경 | **결정(2026-11-24, ADR-0008)**: 화재(화염), 시나리오 `fire_in_view`. 연기는 label로만 기록하고 시나리오는 오탐 측정 후 결정. 균열은 2순위, 벽 손상은 제외. MVP-1 fixture는 실내 통로 시나리오 유지. Stage C0는 COCO `person` 검증 시나리오(ADR-0007) | ENG 시나리오 | 결정됨 |
 | OQ-02 | 글래스 기종, SDK, 카메라 원본 접근 가능 여부 | 시뮬레이터 | COM, INP | Stage F 전 |
 | OQ-03 | Wi-Fi/IMU 제공 여부 | Wi-Fi O, IMU 선택 | ENG-04 | Stage F 실기기 어댑터 전 |
-| OQ-04 | GPU/VRAM 사양 | 개발/검증: Apple M1, Docker Linux arm64 CPU 전용(컨테이너는 Metal GPU 미접근, ADR-0007). 미세조정 학습 GPU 환경은 미정이며 소유자가 확보 시 결정(ADR-0008, TASK-38). pilot GPU는 미정, 1 stream | INP-03, NFR-03 | Stage C1b 전 |
+| OQ-04 | GPU/VRAM 사양 | 개발/검증: Apple M1, Docker Linux arm64 CPU 전용(컨테이너는 Metal GPU 미접근, ADR-0007). 미세조정 학습 GPU: 개발 노트북 RTX 3070 Laptop 8GB(Windows 11, Docker Desktop WSL2, 2026-11-25 컨테이너 GPU 확인, ADR-0008, TASK-38). pilot GPU는 미정, 1 stream | INP-03, NFR-03 | Stage C1b 전 |
 | OQ-05 | 경고 출력 수단 (음성, HUD, 진동) | 텍스트+음성 | COM-03 | Stage D 전 |
 | OQ-06 | 운영 임계값과 정답 데이터 | 테스트 값만 | ENG-06/07 | Stage C |
 | OQ-07 | 서버 OS, 배포 형태 | Linux x86_64 / macOS 개발 | NFR-01 | pilot 배포 전 |
