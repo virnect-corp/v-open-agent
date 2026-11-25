@@ -777,7 +777,7 @@ VOA_MODEL_AUTO_DOWNLOAD=false
 
 `apps/server/pyproject.toml`의 런타임, 모든 optional-dependencies 그룹, build-system 직접 의존성을 아래 표에 등록한다. 패키지 이름은 대소문자와 `-`, `_`, `.` 차이를 정규화해 비교한다. 의존성을 추가하면 같은 작업에서 이 표도 갱신한다.
 
-`Default install=yes`는 현재 기본 런타임, 개발 또는 빌드 설치에 포함됨을 뜻한다. `vision` 그룹(torch, torchvision, transformers, Pillow, timm, safetensors)은 Stage C 선택 설치이고 `vision-dev` 이미지에만 들어간다(ADR-0007). torchvision(처리기), timm(Swin backbone), safetensors(가중치 strict 로드)는 OmDet-Turbo가 요구해 TASK-33에서 추가했다(ADR-0008). `MIT-CMU`(Pillow)는 MIT 계열 허용 라이선스로 2026-11-20 허용 목록에 추가했다. FastAPI, uvicorn(`server` 그룹)과 httpx(`dev` 그룹, 테스트 클라이언트)는 TASK-16부터 기본 설치다. 모든 직접 의존성과 `yes` 항목은 허용적 SPDX 라이선스(MIT, MIT-CMU, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, 0BSD)여야 하며 비공개 API 의무가 없어야 한다. AGPL, NC, 미검토 라이선스는 이 검사에 통과하지 못한다. 이 검사는 네트워크나 설치 패키지 메타데이터를 읽지 않고 명시된 등록부를 검증한다.
+`Default install=yes`는 현재 기본 런타임, 개발 또는 빌드 설치에 포함됨을 뜻한다. `vision` 그룹(torch, torchvision, transformers, Pillow, timm, safetensors)은 Stage C 선택 설치이고 `vision-dev` 이미지에만 들어간다(ADR-0007). torchvision(처리기), timm(Swin backbone), safetensors(가중치 strict 로드)는 OmDet-Turbo가 요구해 TASK-33에서 추가했다(ADR-0008). `train` 그룹(scipy, RT-DETR 학습 loss의 Hungarian matcher)은 미세조정 전용이고 `vision-dev`, `train-cuda` 이미지에만 들어간다(TASK-38). `MIT-CMU`(Pillow)는 MIT 계열 허용 라이선스로 2026-11-20 허용 목록에 추가했다. FastAPI, uvicorn(`server` 그룹)과 httpx(`dev` 그룹, 테스트 클라이언트)는 TASK-16부터 기본 설치다. 모든 직접 의존성과 `yes` 항목은 허용적 SPDX 라이선스(MIT, MIT-CMU, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, 0BSD)여야 하며 비공개 API 의무가 없어야 한다. AGPL, NC, 미검토 라이선스는 이 검사에 통과하지 못한다. 이 검사는 네트워크나 설치 패키지 메타데이터를 읽지 않고 명시된 등록부를 검증한다.
 
 | Package | License (SPDX) | Default install | Non-public API required |
 |---|---|---|---|
@@ -798,3 +798,4 @@ VOA_MODEL_AUTO_DOWNLOAD=false
 | Pillow | MIT-CMU | no | no |
 | timm | Apache-2.0 | no | no |
 | safetensors | Apache-2.0 | no | no |
+| scipy | BSD-3-Clause | no | no |
