@@ -35,13 +35,27 @@ ENV PYTHONPATH=/workspace/apps/server/src
 USER voa
 WORKDIR /workspace
 
-# Stage C0 실모델 검증 이미지 (ADR-0007): dev + 선택 그룹 vision. 가중치는 포함하지 않는다.
+# Stage C0 실모델 검증 이미지 (ADR-0007): dev + 선택 그룹 vision, train(맥 CPU 스모크 학습). 가중치는 포함하지 않는다.
 # torch는 CPU 빌드를 받는다(Docker Desktop for Mac 컨테이너는 GPU를 쓰지 못한다).
 FROM dev AS vision-dev
 USER root
 COPY apps/server/pyproject.toml /tmp/pyproject.toml
-RUN python -c "import tomllib; v = tomllib.load(open('/tmp/pyproject.toml', 'rb'))['project']['optional-dependencies']['vision']; open('/tmp/torch.txt', 'w').write('\n'.join(r for r in v if r.startswith('torch'))); open('/tmp/rest.txt', 'w').write('\n'.join(r for r in v if not r.startswith('torch')))" \
+RUN python -c "import tomllib; o = tomllib.load(open('/tmp/pyproject.toml', 'rb'))['project']['optional-dependencies']; v = o['vision']; open('/tmp/torch.txt', 'w').write('\n'.join(r for r in v if r.startswith('torch'))); open('/tmp/rest.txt', 'w').write('\n'.join([r for r in v if not r.startswith('torch')] + o.get('train', [])))" \
  && pip install --index-url https://download.pytorch.org/whl/cpu -r /tmp/torch.txt \
+ && pip install -r /tmp/rest.txt \
+ && rm /tmp/torch.txt /tmp/rest.txt /tmp/pyproject.toml
+USER voa
+WORKDIR /workspace
+
+# 미세조정 학습 이미지 (ADR-0008, TASK-38): dev + vision, train 그룹, torch는 CUDA 빌드.
+# GPU가 있는 amd64 PC(개발 노트북 RTX 3070)에서 그 자리에서 빌드하고 실행한다. 맥(arm64)에서는
+# 빌드하지 않는다(맥 스모크 학습은 vision-dev CPU 이미지로 한다). 가중치와 데이터는 포함하지 않는다.
+FROM dev AS train-cuda
+ARG TORCH_INDEX=https://download.pytorch.org/whl/cu124
+USER root
+COPY apps/server/pyproject.toml /tmp/pyproject.toml
+RUN python -c "import tomllib; o = tomllib.load(open('/tmp/pyproject.toml', 'rb'))['project']['optional-dependencies']; v = o['vision']; open('/tmp/torch.txt', 'w').write('\n'.join(r for r in v if r.startswith('torch'))); open('/tmp/rest.txt', 'w').write('\n'.join([r for r in v if not r.startswith('torch')] + o.get('train', [])))" \
+ && pip install --index-url "${TORCH_INDEX}" -r /tmp/torch.txt \
  && pip install -r /tmp/rest.txt \
  && rm /tmp/torch.txt /tmp/rest.txt /tmp/pyproject.toml
 USER voa

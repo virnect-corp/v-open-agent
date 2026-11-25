@@ -36,6 +36,10 @@ vision = [
     "timm>=1.0",  # OmDet-Turbo Swin backbone (ADR-0008)
     "safetensors>=0.4",  # OmDet-Turbo strict weight load (ADR-0008)
 ]
+# Fine-tuning only (ADR-0008, TASK-38): RT-DETR Hungarian matcher. In vision-dev and train-cuda.
+train = [
+    "scipy>=1.11",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/voa"]
@@ -59,7 +63,7 @@ plugins = ["pydantic.mypy"]
 [[tool.mypy.overrides]]
 # Optional `vision` group: absent from the default dev image (ADR-0007).
 module = [
-    "torch", "torch.*", "transformers", "transformers.*", "PIL", "PIL.*", "safetensors", "safetensors.*",
+    "torch", "torch.*", "transformers", "transformers.*", "PIL", "PIL.*", "safetensors", "safetensors.*", "scipy", "scipy.*",
 ]
 ignore_missing_imports = true
 

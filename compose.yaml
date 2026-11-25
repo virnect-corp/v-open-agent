@@ -40,6 +40,25 @@ services:
       VOA_MODEL_WEIGHTS_DIR: /workspace/apps/server/var/models
     command: ["bash"]
 
+  # 미세조정 학습 (ADR-0008, TASK-38). GPU PC(amd64)에서만: `scripts/train.sh <args>`
+  # - 이미지는 그 PC에서 빌드한다. 네트워크 없음, 다운로드 금지. 데이터와 가중치는 var/ 아래(git 제외).
+  train:
+    profiles: ["train"]
+    image: v-open-agent:train-cuda
+    build:
+      <<: *server-build
+      target: train-cuda
+    volumes:
+      - .:/workspace
+    working_dir: /workspace/apps/server
+    network_mode: none
+    shm_size: "4gb"               # DataLoader workers
+    gpus: all
+    environment:
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    command: ["bash"]
+
   # 영상 -> 프레임 폴더 추출 (ADR-0007). `scripts/extract-frames.sh <video> <name> [fps]`
   # - 영상 폴더는 실행 시 /input 에 읽기 전용으로 마운트한다. 네트워크 없음.
   frames:
