@@ -54,6 +54,7 @@ class CreateSessionRequest(BaseModel):
     username: str | None = Field(default=None, max_length=64)
     password: str | None = Field(default=None, max_length=256)
     device_label: str | None = Field(default=None, max_length=64)  # display only (ADR-0011)
+    mission_id: str | None = Field(default=None, max_length=64)  # ADR-0010
     capabilities: Capabilities
 
 
@@ -75,10 +76,23 @@ class TokenPair(BaseModel):
     refresh_token_expires_at_utc: UtcDatetime
 
 
+class MissionRef(BaseModel):
+    model_config = MODEL_CONFIG
+    mission_id: Id
+    version: int
+    name: str
+
+
 class SessionCreated(TokenPair):
     session_id: Id
     heartbeat_ms: int
     watchdog_ms: int
+    mission: MissionRef | None = None
+
+
+class SelectMissionRequest(BaseModel):
+    model_config = MODEL_CONFIG
+    mission_id: str = Field(max_length=64)
 
 
 # --- Credentials ---

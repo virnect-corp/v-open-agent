@@ -97,6 +97,12 @@ def test_create_session_issues_tokens_and_records_session(workdir: Path) -> None
         "refresh_token_expires_at_utc",
         "heartbeat_ms",
         "watchdog_ms",
+        "mission",  # ADR-0010: the default mission (indoor_research_v0 v1)
+    }
+    assert data["mission"] == {
+        "mission_id": "indoor_research_v0",
+        "version": 1,
+        "name": "indoor_research_v0",
     }
     assert data["session_id"].startswith("sess_")
     assert data["token"] != data["refresh_token"]

@@ -196,7 +196,8 @@
             "unsupported_message_type",
             "rejected_schema",
             "protocol_error",
-            "stream_not_declared"
+            "stream_not_declared",
+            "mission_not_selected"
           ],
           "title": "Code",
           "type": "string"
@@ -253,6 +254,41 @@
         "states"
       ],
       "title": "HeartbeatMessage",
+      "type": "object"
+    },
+    "MissionMessage": {
+      "additionalProperties": false,
+      "description": "The session's mission was set or changed (ADR-0010).",
+      "properties": {
+        "mission_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.:-]+$",
+          "title": "Mission Id",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "type": {
+          "const": "mission",
+          "default": "mission",
+          "title": "Type",
+          "type": "string"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "mission_id",
+        "version",
+        "name"
+      ],
+      "title": "MissionMessage",
       "type": "object"
     },
     "NoticeMessage": {
@@ -474,6 +510,7 @@
       "decision": "#/$defs/DecisionMessage",
       "error": "#/$defs/ErrorMessage",
       "heartbeat": "#/$defs/HeartbeatMessage",
+      "mission": "#/$defs/MissionMessage",
       "notice": "#/$defs/NoticeMessage"
     },
     "propertyName": "type"
@@ -496,6 +533,9 @@
     },
     {
       "$ref": "#/$defs/HeartbeatMessage"
+    },
+    {
+      "$ref": "#/$defs/MissionMessage"
     },
     {
       "$ref": "#/$defs/ErrorMessage"
