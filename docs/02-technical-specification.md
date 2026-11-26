@@ -846,6 +846,7 @@ OutputCap = Literal["hud", "speaker", "haptic"]
   - `GET .../versions` → `{versions: [{version, profile, settings}]}` 최신 먼저. `GET /v1/admin/changes` → `{changes: [...]}` 최신 먼저(최대 200). `action`: `mission_create`, `mission_update`, `mission_publish`, `mission_archive`, `result_code`: `ok` 또는 오류 code(실패도 기록).
 - 배치 하한 점수: 실제 Provider 하한은 `min(배치 score_floor, 그 모델을 근거로 쓰는 게시 미션 시나리오들의 min_score)`이다. 그래야 profile이 받아들일 근거를 Provider가 먼저 버리지 않는다.
 - 모든 변경(배치, 해제, 미션 생성, 수정, 게시, 보관, settings)은 `admin_changes`에 기록한다. 요청 원문과 token은 남기지 않는다.
+- **관리자 페이지 `/ui/admin` (TASK-45)**: 서버가 패키지 안 정적 파일 4개(`index.html`, `app.js`, `core.js`, `admin.css`)만 목록대로 내보낸다(그 밖은 404). 빌드 도구와 외부 라이브러리는 없다. 헤더: CSP `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`. 페이지 자체는 로그인 없이 받지만 데이터는 없고, 모든 데이터는 관리자 token이 필요한 API로 받는다. **token은 페이지 메모리에만 둔다**(URL, localStorage, sessionStorage, cookie에 두지 않음). 그래서 새로고침하면 로그아웃된다. 서버 문자열은 `textContent`로만 넣는다(HTML로 해석하지 않음). 화면: 로그인, 첫 로그인 비밀번호 변경, 미션(목록, 새 미션, 복제, 보관, 편집기: 판정 규칙, 근거 모델, labels, ROI, 경고 문구, 임계값, HUD 스타일 연결, 권장 프레임 간격, 고급 JSON, 저장, 검증, 게시), 착용자(승인, 사용 중지, 임시 비밀번호), 모델 배치와 이미지 한 장 시험, 프레임 간격과 HUD, 용량, 변경 기록. 로직(`core.js`)은 DOM 없이 `scripts/ui-test.sh`로 가짜 API 응답에 대해 시험한다.
 - 요청과 응답 (TASK-44B):
   - `GET /v1/admin/models` → `{models: [{model_id, kind, revision, labels, weights, deployed, device, score_floor, used_by}]}`. `weights`는 로드 없이 sha256만 확인한다(`builtin`은 `ready`, 파일 크기와 수정 시각으로 캐시). `used_by`는 그 모델을 요구하는 최신 게시 미션과 진행 중 세션의 미션이다.
   - `POST /v1/admin/deployments` → 201 `{model_id, deployed, device, score_floor}`. 모르는 모델 404 `model_not_found`, `object_detection`이 아니면 400 `model_not_servable`, 가중치 문제 400 `model_not_ready`. **`device: "cuda"`는 아직 400 `device_unavailable`이다**(GPU 배치 미구현, GPU 서버를 쓸 때 구현). 세션이나 게시가 모델을 처음 불러오면 기본값(`cpu`, 0.25)으로 배치된 것으로 본다.
@@ -980,3 +981,11 @@ VOA_FRAME_INTERVAL_MAX_MS=1000       # 부하 시 서버가 늘릴 수 있는 �
 | timm | Apache-2.0 | no | no |
 | safetensors | Apache-2.0 | no | no |
 | scipy | BSD-3-Clause | no | no |
+
+### 9.1A 비 Python 도구 (TASK-45)
+
+서버 런타임에 들어가지 않는 개발 도구다. 9.1 검사 대상이 아니라 여기 따로 적는다.
+
+| 도구 | 라이선스 | 쓰는 곳 | 비고 |
+|---|---|---|---|
+| Node.js 22.12.0 (`node:22.12.0-slim` 공식 이미지) | MIT | `ui-test` compose 서비스, `scripts/ui-test.sh` | 관리자/시뮬 페이지 로직 테스트. 내장 `node:test`만 쓰고 npm 패키지는 설치하지 않는다. 네트워크 없음, 소스 읽기 전용 마운트 |
