@@ -33,7 +33,7 @@ def test_schema_has_only_spec_tables_columns_and_no_blobs(tmp_path: Path) -> Non
     path = tmp_path / "metadata.sqlite3"
     with SQLiteStore(path), sqlite3.connect(path) as connection:
         expected = {
-            "sessions": "session_id device_id started_at_utc ended_at_utc",
+            "sessions": "session_id device_id user_id started_at_utc ended_at_utc",
             "observations_meta": (
                 "observation_id session_id stream_id source_kind seq admission_status "
                 "received_at_utc quality_flags_json model_id model_revision"
@@ -45,6 +45,10 @@ def test_schema_has_only_spec_tables_columns_and_no_blobs(tmp_path: Path) -> Non
             "alerts": (
                 "alert_id session_id risk_event_id scenario_id alert_seq delivery_state "
                 "valid_until_utc updated_at_utc"
+            ),
+            "users": (  # ADR-0011: scrypt salt and digest only
+                "user_id username display_name role status password_salt_hex "
+                "password_digest_hex password_change_required created_at_utc updated_at_utc"
             ),
         }
         tables = connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
@@ -58,11 +62,51 @@ def test_schema_has_only_spec_tables_columns_and_no_blobs(tmp_path: Path) -> Non
         assert info[0][2] == "INTEGER"
 
 
+def test_a_database_from_before_accounts_gains_sessions_user_id(tmp_path: Path) -> None:
+    """ADR-0011: an existing DB keeps its sessions and gets the new column in place."""
+    path = tmp_path / "old.sqlite3"
+    with sqlite3.connect(path) as old:
+        old.execute(
+            "CREATE TABLE sessions (session_id TEXT PRIMARY KEY NOT NULL, device_id TEXT NOT NULL,"
+            " started_at_utc TEXT NOT NULL, ended_at_utc TEXT)"
+        )
+        old.execute(
+            "INSERT INTO sessions VALUES ('sess_old', 'dev_1', '2026-11-01T00:00:00Z', NULL)"
+        )
+    with SQLiteStore(path) as store:
+        row = store.get_session("sess_old")
+    assert row is not None and row["user_id"] is None and row["device_id"] == "dev_1"
+    with sqlite3.connect(path) as db:
+        columns = [r[1] for r in db.execute("PRAGMA table_info(sessions)").fetchall()]
+    assert columns == ["session_id", "device_id", "user_id", "started_at_utc", "ended_at_utc"]
+
+
+def test_users_are_not_purged_by_retention(store: SQLiteStore) -> None:
+    store.save_user(
+        {
+            "user_id": "usr_1",
+            "username": "kim_worker",
+            "display_name": None,
+            "role": "wearer",
+            "status": "active",
+            "password_salt_hex": "00" * 16,
+            "password_digest_hex": "11" * 32,
+            "password_change_required": 0,
+            "created_at_utc": "2020-01-01T00:00:00.000000Z",
+            "updated_at_utc": "2020-01-01T00:00:00.000000Z",
+        }
+    )
+    deleted = store.purge_expired(now_utc=NOW, retention_days=1)
+    assert "users" not in deleted and store.get_user("usr_1") is not None
+    assert store.get_user_by_username("kim_worker") == store.get_user("usr_1")
+
+
 def test_session_create_read_update_delete(store: SQLiteStore) -> None:
     store.save_session(session_id="sess_1", device_id="dev_1", started_at_utc=NOW)
     assert store.get_session("sess_1") == {
         "session_id": "sess_1",
         "device_id": "dev_1",
+        "user_id": None,
         "started_at_utc": "2026-11-10T03:00:00.000000Z",
         "ended_at_utc": None,
     }

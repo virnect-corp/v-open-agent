@@ -23,7 +23,21 @@ from fastapi.responses import JSONResponse
 from voa.config.model_registry import check_profile_models, load_manifests
 from voa.config.profile_loader import load_profile
 from voa.engine.profile import PolicyProfile, ProfileError
+from voa.server.accounts import (
+    ADMIN_USERNAME,
+    Accounts,
+    LoginRequest,
+    LoginResponse,
+    LoginToken,
+    LoginTokens,
+    PasswordChangeRequest,
+    Role,
+    SignupRequest,
+    public_user,
+)
 from voa.server.auth import (
+    ALL_INPUTS,
+    ALL_OUTPUTS,
     AckRequest,
     CreateSessionRequest,
     IssuedTokens,
@@ -38,11 +52,16 @@ from voa.server.logconfig import pin_log_levels
 from voa.server.runtime import AnchoredUtcClock, SecureIdFactory
 from voa.server.session import SessionStream
 from voa.server.settings import Settings
-from voa.server.ws import input_loop, register_stream_routes, tick_loop
+from voa.server.ws import CLOSE_UNAUTHORIZED, input_loop, register_stream_routes, tick_loop
 from voa.storage.sqlite import SQLiteStore
 
 NotReadyCode = Literal["profile_invalid", "db_unavailable", "devices_invalid"]
 RETENTION_PURGE_INTERVAL_S = 3600
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
+
+
+class AdminDefaultPasswordError(RuntimeError):
+    """The port is network-exposed while `admin` still has the default password (ADR-0011)."""
 
 
 def settings_from_environment() -> Settings:
@@ -73,6 +92,8 @@ class ServerRuntime:
     clock: AnchoredUtcClock
     mono_ns: Callable[[], int]
     sessions: SessionRegistry
+    login_tokens: LoginTokens
+    accounts: Accounts | None = None
     streams: dict[str, SessionStream] = field(default_factory=dict)
     connections: dict[str, WebSocket] = field(default_factory=dict)
     tick_tasks: dict[str, "asyncio.Task[None]"] = field(default_factory=dict)
@@ -100,6 +121,8 @@ class ServerRuntime:
                 token_ttl_s=settings.token_ttl_s,
                 refresh_ttl_s=settings.refresh_token_ttl_s,
             ),
+            login_tokens=LoginTokens(ttl_ns=settings.token_ttl_s * 1_000_000_000),
+            accounts=Accounts(store) if store is not None else None,
         )
 
     def not_ready_code(self) -> NotReadyCode | None:
@@ -128,6 +151,7 @@ class ServerRuntime:
             if task is not None:
                 task.cancel()
         stream = self.streams.pop(session_id, None)
+        auth = self.sessions.get(session_id)
         self.sessions.remove(session_id)
         if stream is not None and self.store is not None:
             self.store.save_session(
@@ -135,6 +159,7 @@ class ServerRuntime:
                 device_id=stream.device_id,
                 started_at_utc=stream.started_at_utc,
                 ended_at_utc=self.clock.at(now_mono_ns),
+                user_id=auth.user_id if auth is not None else None,
             )
 
     def sweep_sessions(self, now_mono_ns: int) -> list[str]:
@@ -173,6 +198,35 @@ def _bearer_session(runtime: "ServerRuntime", request: Request, now_mono_ns: int
     return runtime.sessions.session_for_access(token, now_mono_ns)
 
 
+def _bearer(request: Request) -> str | None:
+    scheme, _, token = request.headers.get("authorization", "").partition(" ")
+    return token if scheme.lower() == "bearer" and token else None
+
+
+def _login(runtime: "ServerRuntime", request: Request) -> LoginToken | None:
+    token = _bearer(request)
+    return runtime.login_tokens.lookup(token, runtime.mono_ns()) if token else None
+
+
+def _from_loopback(runtime: "ServerRuntime", request: Request) -> bool:
+    """Loopback peer, or a port the operator declared loopback-only (compose)."""
+    host = request.client.host if request.client is not None else ""
+    return runtime.settings.exposure == "loopback" or host in LOOPBACK_HOSTS
+
+
+def _admin_guard(runtime: "ServerRuntime", request: Request) -> JSONResponse | None:
+    """401 without an admin login, 403 until the default password is changed."""
+    login = _login(runtime, request)
+    if login is None or login.role != "admin" or runtime.accounts is None:
+        return _error(401, "unauthorized")
+    user = runtime.store.get_user(login.user_id) if runtime.store is not None else None
+    if user is None:
+        return _error(401, "unauthorized")
+    if user["password_change_required"]:
+        return _error(403, "password_change_required")
+    return None
+
+
 async def _every(interval_s: float, action: Callable[[], object]) -> None:
     while True:
         await asyncio.sleep(interval_s)
@@ -202,6 +256,12 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         pin_log_levels()  # no DEBUG frame dumps, however uvicorn was started (DAT-02)
         runtime = ServerRuntime.build(load_settings(), mono_ns)
+        if runtime.accounts is not None:
+            runtime.accounts.ensure_admin(runtime.clock.at(runtime.mono_ns()))
+            exposed = runtime.settings.exposure == "network"
+            if exposed and runtime.accounts.admin_has_default_password():
+                runtime.close()
+                raise AdminDefaultPasswordError("change the admin password before exposing")
         app.state.runtime = runtime
         runtime.purge_metadata()  # at start, then hourly (SPEC 8.1)
         runtime.background += [
@@ -243,9 +303,29 @@ def create_app(
         runtime: ServerRuntime = request.app.state.runtime
         if runtime.not_ready_code() is not None:
             return _error(503, "not_ready")
-        allowed = authenticate_device(
-            body, runtime.devices, allow_insecure_dev=runtime.settings.allow_insecure_dev
-        )
+        user_id: str | None = None
+        if body.username is not None:  # wearer account (ADR-0011)
+            if body.device_id is not None or runtime.accounts is None:
+                return _error(400, "invalid_request")
+            result, user = runtime.accounts.authenticate(
+                body.username, body.password or "", runtime.mono_ns()
+            )
+            if result == "locked":
+                return _error(429, "too_many_attempts")
+            if result == "pending":
+                return _error(403, "account_pending")
+            if result != "ok" or user is None or user["role"] != "wearer":
+                return _error(401, "unauthorized")
+            if user["password_change_required"]:
+                return _error(403, "password_change_required")
+            user_id = str(user["user_id"])
+            allowed: tuple[frozenset[str], frozenset[str]] | None = (ALL_INPUTS, ALL_OUTPUTS)
+        elif body.device_id is None:
+            return _error(400, "invalid_request")
+        else:
+            allowed = authenticate_device(
+                body, runtime.devices, allow_insecure_dev=runtime.settings.allow_insecure_dev
+            )
         if allowed is None:
             return _error(401, "unauthorized")
         inputs, outputs = allowed
@@ -258,12 +338,15 @@ def create_app(
         profile = runtime.profile
         assert isinstance(profile, PolicyProfile)  # guaranteed by the readiness check
         now = runtime.mono_ns()
-        session, tokens = runtime.sessions.create(body.device_id, caps, now)
+        device_id = body.device_id if user_id is None else user_id
+        assert device_id is not None
+        session, tokens = runtime.sessions.create(device_id, caps, now, user_id=user_id)
         if runtime.store is not None:
             runtime.store.save_session(
                 session_id=session.session_id,
                 device_id=session.device_id,
                 started_at_utc=runtime.clock.at(now),
+                user_id=user_id,
             )
         stream = SessionStream.start(
             session_id=session.session_id,
@@ -326,8 +409,124 @@ def create_app(
         state = stream.dispatcher.records[alert_id].state
         return JSONResponse({"alert_id": alert_id, "delivery_state": state})
 
+    # --- Accounts (ADR-0011, SPEC 7.1) ---
+
+    @app.post("/v1/auth/login")
+    async def login(request: Request, body: LoginRequest) -> JSONResponse:
+        runtime: ServerRuntime = request.app.state.runtime
+        if runtime.accounts is None:
+            return _error(503, "not_ready")
+        now = runtime.mono_ns()
+        result, user = runtime.accounts.authenticate(body.username, body.password, now)
+        if result == "locked":
+            return _error(429, "too_many_attempts")
+        if result == "pending":
+            return _error(403, "account_pending")
+        if result != "ok" or user is None:
+            return _error(401, "unauthorized")
+        default_admin = body.username == ADMIN_USERNAME and bool(user["password_change_required"])
+        if default_admin and not _from_loopback(runtime, request):
+            return _error(401, "unauthorized")  # the default password is loopback-only
+        role: Role = "admin" if user["role"] == "admin" else "wearer"
+        token, expires = runtime.login_tokens.issue(str(user["user_id"]), role, now)
+        body_out = LoginResponse(
+            token=token,
+            token_expires_at_utc=runtime.clock.at(expires),
+            role=role,
+            password_change_required=bool(user["password_change_required"]),
+        )
+        return JSONResponse(body_out.model_dump(mode="json"))
+
+    @app.post("/v1/auth/signup")
+    async def signup(request: Request, body: SignupRequest) -> JSONResponse:
+        runtime: ServerRuntime = request.app.state.runtime
+        if runtime.accounts is None:
+            return _error(503, "not_ready")
+        if not runtime.settings.signup_enabled:
+            return _error(403, "signup_disabled")
+        result = runtime.accounts.signup(
+            body,
+            requires_approval=runtime.settings.signup_requires_approval,
+            now_utc=runtime.clock.at(runtime.mono_ns()),
+        )
+        if result == "invalid":
+            return _error(400, "invalid_request")
+        if result == "taken":
+            return _error(409, "username_taken")
+        user_id, status = result
+        return JSONResponse({"user_id": user_id, "status": status}, status_code=201)
+
+    @app.post("/v1/auth/password")
+    async def change_password(request: Request, body: PasswordChangeRequest) -> JSONResponse:
+        runtime: ServerRuntime = request.app.state.runtime
+        login = _login(runtime, request)
+        if login is None or runtime.accounts is None:
+            return _error(401, "unauthorized")
+        changed = runtime.accounts.change_password(
+            login.user_id,
+            body.current_password,
+            body.new_password,
+            runtime.clock.at(runtime.mono_ns()),
+        )
+        if not changed:
+            return _error(400, "invalid_request")
+        return JSONResponse({"password_change_required": False})
+
+    @app.get("/v1/admin/users")
+    async def list_users(request: Request) -> JSONResponse:
+        runtime: ServerRuntime = request.app.state.runtime
+        denied = _admin_guard(runtime, request)
+        if denied is not None:
+            return denied
+        assert runtime.store is not None
+        return JSONResponse({"users": [public_user(u) for u in runtime.store.list_users()]})
+
+    @app.post("/v1/admin/users/{user_id}:approve")
+    async def approve_user(request: Request, user_id: str) -> JSONResponse:
+        return await _set_status(request, user_id, "active")
+
+    @app.post("/v1/admin/users/{user_id}:disable")
+    async def disable_user(request: Request, user_id: str) -> JSONResponse:
+        return await _set_status(request, user_id, "disabled")
+
+    @app.post("/v1/admin/users/{user_id}:reset-password")
+    async def reset_password(request: Request, user_id: str) -> JSONResponse:
+        runtime: ServerRuntime = request.app.state.runtime
+        denied = _admin_guard(runtime, request)
+        if denied is not None:
+            return denied
+        assert runtime.accounts is not None
+        temporary = runtime.accounts.reset_password(user_id, runtime.clock.at(runtime.mono_ns()))
+        if temporary is None:
+            return _error(404, "not_found")
+        runtime.login_tokens.revoke_user(user_id)
+        return JSONResponse({"user_id": user_id, "temporary_password": temporary})
+
     register_stream_routes(app)
     return app
+
+
+async def _set_status(
+    request: Request, user_id: str, status: Literal["active", "disabled"]
+) -> JSONResponse:
+    runtime: ServerRuntime = request.app.state.runtime
+    denied = _admin_guard(runtime, request)
+    if denied is not None:
+        return denied
+    assert runtime.accounts is not None
+    now = runtime.mono_ns()
+    user = runtime.accounts.set_status(user_id, status, runtime.clock.at(now))
+    if user is None:
+        return _error(404, "not_found")
+    if status == "disabled":  # ADR-0011: running sessions end, logins stop working
+        for session_id in runtime.sessions.for_user(user_id):
+            websocket = runtime.connections.pop(session_id, None)
+            if websocket is not None:
+                with contextlib.suppress(RuntimeError):
+                    await websocket.close(code=CLOSE_UNAUTHORIZED)
+            runtime.end_session(session_id, now)
+        runtime.login_tokens.revoke_user(user_id)
+    return JSONResponse(public_user(user))
 
 
 app = create_app()

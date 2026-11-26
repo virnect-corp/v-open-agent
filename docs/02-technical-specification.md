@@ -532,13 +532,13 @@ scenarios:
 ### 7.1 장치 등록과 인증
 
 **계정 (ADR-0011)**: 사람 계정은 관리자와 착용자 두 종류다.
-- 관리자 `admin`의 초기 비밀번호는 `admin`이다. 초기값 상태에서는 `127.0.0.1` 접속에서만 로그인되고, 비밀번호를 바꾸기 전까지 관리자 API는 403 `password_change_required`다. `VOA_BIND`가 루프백이 아닌데 초기값이면 서버는 시작하지 않는다.
+- 관리자 `admin`의 초기 비밀번호는 `admin`이다(서버가 처음 시작할 때 만든다). 초기값 상태에서는 루프백 접속(접속 주소가 `127.0.0.1`/`::1`이거나 `VOA_EXPOSURE=loopback`)에서만 로그인되고, 비밀번호를 바꾸기 전까지 관리자 API는 403 `password_change_required`다. `VOA_BIND`가 루프백이 아닌데 초기값이면 서버는 시작하지 않는다.
 - `POST /v1/auth/login {username, password}` → `{token, token_expires_at_utc, role, password_change_required}`. `POST /v1/auth/password {current_password, new_password}`(Bearer)로 비밀번호를 바꾼다.
-- 착용자 가입: `POST /v1/auth/signup {username, password, display_name?}` → 201 `{user_id, status}`.
+- 착용자 가입: `POST /v1/auth/signup {username, password, display_name?}` → 201 `{user_id, status}`. 형식이나 비밀번호 규칙 위반, `admin` 사용은 400 `invalid_request`다.
   - `username`은 `^[a-z0-9_-]{3,32}$`이고, 중복이면 409 `username_taken`이다.
   - 비밀번호는 8자 이상이고 `username`과 같을 수 없다.
   - 기본 상태는 `pending`이고 관리자가 승인하면 `active`다(`VOA_SIGNUP_REQUIRES_APPROVAL`). `VOA_SIGNUP_ENABLED=false`면 403 `signup_disabled`다.
-- 착용자 세션: `POST /v1/sessions {username, password, device_label?, capabilities, mission_id?}`. 세션에 `user_id`가 붙는다.
+- 착용자 세션: `POST /v1/sessions {username, password, device_label?, capabilities, mission_id?}`. 세션에 `user_id`가 붙고 `device_id`도 `user_id`로 기록한다(`device_label`은 표시용이며 저장하지 않는다). 착용자는 모든 입출력 capability를 쓸 수 있다. `{device_id}`와 `{username}`을 함께 보내거나 둘 다 없으면 400 `invalid_request`다. 임시 비밀번호 상태면 403 `password_change_required`다.
   - 인증 실패(비밀번호 오류, 없는 계정, `disabled`)는 같은 비용의 scrypt를 거쳐 원인 구분 없이 401이다.
   - 비밀번호가 맞고 `pending`이면 403 `account_pending`이다.
   - 같은 `username`으로 5분 안에 5회 실패하면 5분 동안 429 `too_many_attempts`다.

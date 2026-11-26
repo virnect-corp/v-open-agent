@@ -7,6 +7,7 @@ _STRING_FIELDS = (
     "event",
     "session_id",
     "device_id",
+    "user_id",
     "stream_id",
     "observation_id",
     "scenario_id",

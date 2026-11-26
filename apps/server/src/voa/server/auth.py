@@ -46,9 +46,14 @@ class Capabilities(BaseModel):
 
 
 class CreateSessionRequest(BaseModel):
+    """Device credential (`device_id`, `secret`) or wearer account (`username`, `password`)."""
+
     model_config = MODEL_CONFIG
-    device_id: Id
+    device_id: Id | None = None
     secret: str | None = Field(default=None, max_length=1024)
+    username: str | None = Field(default=None, max_length=64)
+    password: str | None = Field(default=None, max_length=256)
+    device_label: str | None = Field(default=None, max_length=64)  # display only (ADR-0011)
     capabilities: Capabilities
 
 
@@ -88,7 +93,7 @@ def authenticate_device(
     """Return (allowed_inputs, allowed_outputs) or None. Failures are indistinguishable."""
     if allow_insecure_dev and request.device_id == INSECURE_DEV_DEVICE:
         return ALL_INPUTS, ALL_OUTPUTS
-    device = (devices or {}).get(request.device_id)
+    device = (devices or {}).get(request.device_id or "")
     ok = verify_scrypt(request.secret or "", device.secret_scrypt if device else _DUMMY)
     if device is None or request.secret is None or not ok:
         return None
@@ -108,6 +113,7 @@ class SessionAuth:
     access_expires_mono_ns: int
     refresh_digest: bytes
     refresh_expires_mono_ns: int
+    user_id: str | None = None  # wearer account sessions (ADR-0011)
 
 
 @dataclass(frozen=True)
@@ -133,6 +139,9 @@ class SessionRegistry:
     def remove(self, session_id: str) -> None:
         self._sessions.pop(session_id, None)
 
+    def for_user(self, user_id: str) -> list[str]:
+        return [s.session_id for s in self._sessions.values() if s.user_id == user_id]
+
     def refresh_expired(self, now_mono_ns: int) -> list[str]:
         """Sessions that can no longer be refreshed (ADR-0005)."""
         return [
@@ -142,7 +151,11 @@ class SessionRegistry:
         ]
 
     def create(
-        self, device_id: str, capabilities: Capabilities, now_mono_ns: int
+        self,
+        device_id: str,
+        capabilities: Capabilities,
+        now_mono_ns: int,
+        user_id: str | None = None,
     ) -> tuple[SessionAuth, IssuedTokens]:
         tokens = self._issue(now_mono_ns)
         session = SessionAuth(
@@ -154,6 +167,7 @@ class SessionRegistry:
             access_expires_mono_ns=tokens.token_expires_mono_ns,
             refresh_digest=token_digest(tokens.refresh_token),
             refresh_expires_mono_ns=tokens.refresh_expires_mono_ns,
+            user_id=user_id,
         )
         self._sessions[session.session_id] = session
         return session, tokens

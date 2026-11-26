@@ -17,10 +17,10 @@ from voa.contracts.observation import Observation
 
 _Value = str | int | None
 MetadataRow = dict[str, _Value]
-_Table = Literal["sessions", "observations_meta", "decisions", "alerts"]
+_Table = Literal["sessions", "observations_meta", "decisions", "alerts", "users"]
 
 _COLUMNS: dict[_Table, tuple[str, ...]] = {
-    "sessions": ("session_id", "device_id", "started_at_utc", "ended_at_utc"),
+    "sessions": ("session_id", "device_id", "user_id", "started_at_utc", "ended_at_utc"),
     "observations_meta": (
         "observation_id",
         "session_id",
@@ -55,8 +55,22 @@ _COLUMNS: dict[_Table, tuple[str, ...]] = {
         "valid_until_utc",
         "updated_at_utc",
     ),
+    # Accounts (ADR-0011): scrypt salt and digest only, never a plain password.
+    "users": (
+        "user_id",
+        "username",
+        "display_name",
+        "role",
+        "status",
+        "password_salt_hex",
+        "password_digest_hex",
+        "password_change_required",
+        "created_at_utc",
+        "updated_at_utc",
+    ),
 }
 
+# `users` is account data, not metadata: it is not purged by retention (SPEC 8.1).
 _RETENTION_COLUMNS: dict[_Table, str] = {
     "sessions": "started_at_utc",
     "observations_meta": "received_at_utc",
@@ -68,6 +82,7 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
     session_id TEXT PRIMARY KEY NOT NULL,
     device_id TEXT NOT NULL,
+    user_id TEXT,
     started_at_utc TEXT NOT NULL,
     ended_at_utc TEXT
 );
@@ -105,6 +120,18 @@ CREATE TABLE IF NOT EXISTS alerts (
     valid_until_utc TEXT,
     updated_at_utc TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS users (
+    user_id TEXT PRIMARY KEY NOT NULL,
+    username TEXT NOT NULL UNIQUE,
+    display_name TEXT,
+    role TEXT NOT NULL,
+    status TEXT NOT NULL,
+    password_salt_hex TEXT NOT NULL,
+    password_digest_hex TEXT NOT NULL,
+    password_change_required INTEGER NOT NULL,
+    created_at_utc TEXT NOT NULL,
+    updated_at_utc TEXT NOT NULL
+);
 """
 
 
@@ -129,10 +156,36 @@ class SQLiteStore:
         self._connection = sqlite3.connect(str(path))
         self._connection.row_factory = sqlite3.Row
         try:
+            self._migrate_sessions_user_id()
             self._connection.executescript(_SCHEMA)
         except sqlite3.Error:
             self._connection.close()
             raise
+
+    def _migrate_sessions_user_id(self) -> None:
+        """A DB made before ADR-0011 has `sessions` without `user_id`: rebuild it in order."""
+        columns = [
+            row[1] for row in self._connection.execute("PRAGMA table_info(sessions)").fetchall()
+        ]
+        if not columns or "user_id" in columns:
+            return
+        with self._connection:
+            self._connection.executescript(
+                """
+                ALTER TABLE sessions RENAME TO sessions_before_accounts;
+                CREATE TABLE sessions (
+                    session_id TEXT PRIMARY KEY NOT NULL,
+                    device_id TEXT NOT NULL,
+                    user_id TEXT,
+                    started_at_utc TEXT NOT NULL,
+                    ended_at_utc TEXT
+                );
+                INSERT INTO sessions (session_id, device_id, started_at_utc, ended_at_utc)
+                    SELECT session_id, device_id, started_at_utc, ended_at_utc
+                    FROM sessions_before_accounts;
+                DROP TABLE sessions_before_accounts;
+                """
+            )
 
     def __enter__(self) -> Self:
         return self
@@ -155,12 +208,14 @@ class SQLiteStore:
         device_id: str,
         started_at_utc: datetime,
         ended_at_utc: datetime | None = None,
+        user_id: str | None = None,
     ) -> None:
         self._save(
             "sessions",
             (
                 session_id,
                 device_id,
+                user_id,
                 _utc_text(started_at_utc),
                 _utc_text(ended_at_utc) if ended_at_utc is not None else None,
             ),
@@ -171,6 +226,28 @@ class SQLiteStore:
 
     def delete_session(self, session_id: str) -> bool:
         return self._delete("sessions", session_id)
+
+    def save_user(self, row: MetadataRow) -> None:
+        """Upsert an account row (keys = the `users` columns; times as UTC text)."""
+        self._save("users", tuple(row[column] for column in _COLUMNS["users"]))
+
+    def get_user(self, user_id: str) -> MetadataRow | None:
+        return self._get("users", user_id)
+
+    def get_user_by_username(self, username: str) -> MetadataRow | None:
+        columns = _COLUMNS["users"]
+        row = self._connection.execute(
+            f"SELECT {', '.join(columns)} FROM users WHERE username = ?", (username,)
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def list_users(self) -> list[MetadataRow]:
+        columns = _COLUMNS["users"]
+        rows = self._connection.execute(
+            f"SELECT {', '.join(columns)} FROM users "
+            "ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, created_at_utc, username"
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def save_observation(self, observation: Observation, *, admission_status: str) -> None:
         model = observation.model
