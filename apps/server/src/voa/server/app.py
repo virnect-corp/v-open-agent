@@ -68,6 +68,7 @@ from voa.server.logconfig import pin_log_levels
 from voa.server.runtime import AnchoredUtcClock, SecureIdFactory
 from voa.server.session import SessionStream
 from voa.server.settings import Settings
+from voa.server.ui import register_ui_routes
 from voa.server.ws import CLOSE_UNAUTHORIZED, input_loop, register_stream_routes, tick_loop
 from voa.storage.sqlite import SQLiteStore
 
@@ -814,6 +815,7 @@ def create_app(
     register_stream_routes(app)
     register_frame_routes(app)
     register_admin_routes(app)
+    register_ui_routes(app)
     return app
 
 
