@@ -1,6 +1,6 @@
 # ADR-0009: 서버 쪽 추론, 프레임 전송 방식, 관리자 설정 API
 
-- Status: accepted (2026-11-26, 소유자 결정 반영)
+- Status: accepted (2026-11-26, 소유자 결정 반영). 단일 활성 profile 부분은 ADR-0010(미션)으로, 관리자 token 부분은 ADR-0011(계정)로 확장됨
 - Date: 2026-11-26
 - Owners: Contract, Server, Provider/Replay, Engine(profile), Android
 - Related: INP-01, INP-03, INP-05, COM-02, ENG-15, ENG-19, DAT-01, DAT-02, NFR-03, ADR-0004, ADR-0007, ADR-0008, SPEC §4.9, §7.2, §7.4, §8.1, §8.2, §9
@@ -235,6 +235,7 @@
   5. `/ui/sim`
   6. Android 참조 클라이언트 프레임 업로드(Stage F)
 - 되돌림: 프레임 업로드와 관리자 API를 끄면 현재의 `observation` 경로가 그대로 남는다.
+- **Android 연동**: Android 참조 클라이언트도 이 결정에 맞춰 개발해야 한다(`docs/05-android-client-plan.md` AND-06A, 소유자 지시 2026-11-26).
 
 ## Verification
 

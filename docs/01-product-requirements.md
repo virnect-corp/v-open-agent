@@ -119,7 +119,7 @@
 
 | ID | 요구사항 | P | 수용 기준 |
 |---|---|---|---|
-| COM-01 | 장치 자격증명으로 세션을 만들고, 인증되지 않은 연결이나 만료된 token은 거부하며 refresh token은 사용 시 회전한다. 연결이 없고 refresh token이 만료된 세션은 정리한다 (ADR-0005) | M | 무인증/만료 → 401(WebSocket은 핸드셰이크에서 HTTP 401, ADR-0009), refresh 성공 후 이전 token 재사용 → 401, 정리된 세션의 refresh/핸드셰이크 → 401. 루프백이 아닌 bind는 TLS 필수 |
+| COM-01 | 착용자 계정(가입, 관리자 승인) 또는 장치 자격증명으로 세션을 만들고, 관리자는 고정 계정 `admin`(첫 로그인 시 비밀번호 변경)으로 관리한다(ADR-0011).  인증되지 않은 연결이나 만료된 token은 거부하며 refresh token은 사용 시 회전한다. 연결이 없고 refresh token이 만료된 세션은 정리한다 (ADR-0005) | M | 무인증/만료 → 401(WebSocket은 핸드셰이크에서 HTTP 401, ADR-0009), refresh 성공 후 이전 token 재사용 → 401, 정리된 세션의 refresh/핸드셰이크 → 401. 루프백이 아닌 bind는 TLS 필수 |
 | COM-02 | WS로 관측을 받아 엔진에 넣고 결정/alert를 push한다. 주기적 tick을 실행한다 | M | 시뮬레이터 E2E로 warning alert를 수신 |
 | COM-03 | ACK의 `received`와 `played`를 구분한다. 기한에 `sent` 이후 ACK가 없으면 `unknown_delivery`이고 `received`는 `played`로 오인하지 않는다 | M | T-R11 |
 | COM-04 | 같은 alert는 한 번만 전달하고, 재접속 시 현재 상태로 다시 확인한 뒤 유효한 alert만 보낸다 | M | T-R10, UC-05 |
@@ -220,3 +220,4 @@ MVP-1 개발에 필요한 계약값은 SPEC에 확정한다. 아래 항목은 �
 | OQ-09 | 경고 대상 균열 기준과 정답 데이터 (어떤 균열부터 경고하는가) | 미정. 수치(폭/길이) 주장은 보정 근거 전까지 금지 | UC-10, OQ-06 | Stage C |
 | OQ-10 | open-vocabulary 기본 모델 확정 (OmDet-Turbo / OWLv2 / Grounding DINO 중 정확도, 지연, GPU 비용 비교) | OmDet-Turbo 우선 시험 | INP-05, OQ-04 | Stage C 전 |
 | OQ-11 | 미세조정 모델 확정 (RT-DETR vs RF-DETR, bbox vs segmentation) | 같은 데이터로 비교 후 결정 | INP-05, OQ-04 | Stage C |
+| OQ-12 | 글래스 HUD의 위치 표시(방향 화살표 등): 서버 판정과 표시 사이 지연(약 0.35초)과 머리 움직임을 IMU로 보정할 수 있는가 | 위치 표시 없음. 경고는 위치 무관 문구, 흔들린 프레임은 `camera_motion_uncompensated`로 근거 제외 (ADR-0010) | COM-03, ENG-04 | Stage F (OQ-03 이후) |

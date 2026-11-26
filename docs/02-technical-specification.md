@@ -530,6 +530,21 @@ scenarios:
 ## 7. 서버 / 전송 (`voa.server`)
 
 ### 7.1 장치 등록과 인증
+
+**계정 (ADR-0011)**: 사람 계정은 관리자와 착용자 두 종류다.
+- 관리자 `admin`의 초기 비밀번호는 `admin`이다. 초기값 상태에서는 `127.0.0.1` 접속에서만 로그인되고, 비밀번호를 바꾸기 전까지 관리자 API는 403 `password_change_required`다. `VOA_BIND`가 루프백이 아닌데 초기값이면 서버는 시작하지 않는다.
+- `POST /v1/auth/login {username, password}` → `{token, token_expires_at_utc, role, password_change_required}`. `POST /v1/auth/password {current_password, new_password}`(Bearer)로 비밀번호를 바꾼다.
+- 착용자 가입: `POST /v1/auth/signup {username, password, display_name?}` → 201 `{user_id, status}`.
+  - `username`은 `^[a-z0-9_-]{3,32}$`이고, 중복이면 409 `username_taken`이다.
+  - 비밀번호는 8자 이상이고 `username`과 같을 수 없다.
+  - 기본 상태는 `pending`이고 관리자가 승인하면 `active`다(`VOA_SIGNUP_REQUIRES_APPROVAL`). `VOA_SIGNUP_ENABLED=false`면 403 `signup_disabled`다.
+- 착용자 세션: `POST /v1/sessions {username, password, device_label?, capabilities, mission_id?}`. 세션에 `user_id`가 붙는다.
+  - 인증 실패(비밀번호 오류, 없는 계정, `disabled`)는 같은 비용의 scrypt를 거쳐 원인 구분 없이 401이다.
+  - 비밀번호가 맞고 `pending`이면 403 `account_pending`이다.
+  - 같은 `username`으로 5분 안에 5회 실패하면 5분 동안 429 `too_many_attempts`다.
+- 비밀번호 저장은 아래 장치 secret과 같은 scrypt 규칙이다. 평문은 저장하지 않고 로그에 남기지 않는다.
+- 사람이 없는 장치와 테스트는 아래 장치 credential 방식을 계속 쓸 수 있다. 세션 생성은 `{username, password}` 또는 `{device_id, secret}` 중 하나로 인증한다.
+
 - 장치는 `apps/server/config/devices.yaml`(git에서 제외. 형식은 같은 폴더의 `devices.example.yaml`)에 다음 형태로 등록한다. 알 수 없는 키는 거부한다.
 ```yaml
 devices:
@@ -541,7 +556,14 @@ devices:
     allowed_outputs: [hud, speaker]
 ```
 - `salt_hex`는 16바이트, `digest_hex`는 32바이트다. 검증값은 `hashlib.scrypt(secret.encode("utf-8"), salt=bytes.fromhex(salt_hex), n=2**14, r=8, p=1, dklen=32)`로 계산하고 `hmac.compare_digest`로 비교한다. 파라미터는 파일에서 바꾸지 않는다.
-- `POST /v1/sessions {device_id, secret, capabilities: {inputs: [...], outputs: [...]}}` → `{session_id, token, token_expires_at_utc, refresh_token, refresh_token_expires_at_utc, heartbeat_ms, watchdog_ms, frame_interval_ms}` (`frame_interval_ms`는 §7.6, ADR-0009)
+- `POST /v1/sessions {device_id, secret, capabilities: {inputs: [...], outputs: [...], hud?: {...}}, mission_id?}` → `{session_id, token, token_expires_at_utc, refresh_token, refresh_token_expires_at_utc, heartbeat_ms, watchdog_ms, frame_interval_ms, mission: {mission_id, version, name} | null}` (`frame_interval_ms`는 §7.6, 미션은 ADR-0010. `mission_id`를 생략하면 `VOA_DEFAULT_MISSION`, 그것도 비어 있으면 미션 없이 만들고 장치가 고른다)
+  - **동시 세션 상한 (ADR-0010)**: 장치 세션 수가 `VOA_MAX_SESSIONS`에 이르면 503 `{"code":"capacity_exceeded","active","max","retry_after_s"}`와 `Retry-After` 헤더를 돌려준다. 관리자 접속은 세지 않는다.
+- **미션 선택 (ADR-0010)**: 세션 access token으로 호출한다.
+  - `GET /v1/missions` → 게시된 미션 목록 `[{mission_id, name, description, version, scenarios: [{id, labels, severity}], models: [model_id], frame_interval_ms}]`
+  - `PUT /v1/sessions/{session_id}/mission {mission_id}` → `{mission_id, version, name, frame_interval_ms}`
+    - 고른 미션의 최신 게시 버전으로 세션 엔진을 새로 만든다. 다른 미션으로 바꾸면 이전 엔진을 버리고 새 미션의 시나리오는 모두 `unknown`에서 시작한다.
+    - 없거나 게시되지 않은 미션은 404 `mission_not_found`다.
+    - 제어 WebSocket에 `mission` 메시지를 보낸다.
   - token과 refresh token은 각각 `secrets.token_urlsafe(32)`로 만든다. 서버는 각 token의 SHA-256 digest만 메모리에 보관하고 검증 시 `hmac.compare_digest`를 사용한다. 평문, secret, digest를 DB와 로그에 남기지 않는다.
   - access token TTL은 `VOA_TOKEN_TTL_S`, refresh token TTL은 `VOA_REFRESH_TOKEN_TTL_S`다. access token은 WebSocket handshake 시점에 검증하며 이미 인증된 WebSocket은 token 만료로 즉시 종료하지 않는다.
   - `POST /v1/sessions/{session_id}/refresh {refresh_token}`은 세션이 서버 메모리에 있고 refresh token이 유효할 때 `{token, token_expires_at_utc, refresh_token, refresh_token_expires_at_utc}`를 반환한다. 성공 시 이전 token 둘을 즉시 폐기하는 일회성 회전이고, 새 refresh token의 만료 시각은 이 시점부터 다시 계산한다(ADR-0005).
@@ -566,6 +588,8 @@ devices:
 - 브라우저: `Sec-WebSocket-Protocol: voa.v1, voa.bearer.<access token>`. 서버는 선택한 subprotocol로 `voa.v1`만 되돌려 준다.
 - token의 session과 path의 `session_id`가 다르면 401이다. token은 URL과 query에 넣지 않는다.
 - 연결이 열리면 서버가 먼저 `auth_ok`를 보낸다. 클라이언트는 그다음 `alert_sync`를 보낸다.
+- **정원 초과 (ADR-0010)**: 열린 제어 WebSocket 수가 `VOA_MAX_SESSIONS`를 넘게 되면, 서버는 연결을 받은 뒤 `error(code="capacity_exceeded", active, max, retry_after_s)`를 보내고 close 4503으로 닫는다. 브라우저는 거절된 핸드셰이크의 본문을 읽을 수 없어서, 안내를 메시지로 전달하기 위해 이렇게 한다. 장치는 §7.4 상태 표시줄의 "정원 초과"와 내장 문구로 안내한다.
+- **프레임 전송 시작 조건 (ADR-0010)**: 장치는 `auth_ok`와 미션 확정(`mission` 메시지 또는 선택 응답)을 모두 받은 뒤에 §7.6 업로드를 시작한다. 연결이 끊기면 업로드를 멈추고 재접속한 뒤 다시 시작한다.
 
 **프레임은 이 WebSocket으로 보내지 않는다.** 이미지는 §7.6 HTTP 업로드로 보낸다. 이 연결은 경고, ACK, heartbeat처럼 작은 제어 메시지 전용이라, 큰 프레임 때문에 경고가 늦어지지 않는다.
 
@@ -583,9 +607,10 @@ devices:
 | S→C | `alert` | `alert_seq`(세션 내 1부터 증가), Alert, `risk_event_id`, `scenario_id`, `presentation`(§7.4 HUD 표시 규칙, ADR-0009) |
 | S→C | `notice` | `notice_id`, `kind: degraded`, `scenario_id`, `text`, `presentation` (§7.4 판단 불가 고지와 HUD 표시 규칙) |
 | S→C | `heartbeat` | `server_time_utc`, `states: {scenario_id: RiskState}`, `frames: {received, processed, skipped, rejected}` (`VOA_HEARTBEAT_MS`마다) |
-| S→C | `config` | `frame_interval_ms` (관리자가 바꾸면 진행 중인 세션에 즉시 보냄. 전송 속도 설정이며 판단 규칙이 아님) |
+| S→C | `config` | `frame_interval_ms` (관리자 변경, 또는 부하로 서버가 간격을 늘리거나 되돌릴 때 진행 중인 세션에 즉시 보냄. 전송 속도 설정이며 판단 규칙이 아님) |
+| S→C | `mission` | `mission_id`, `version`, `name`, `frame_interval_ms` (세션의 미션이 정해지거나 바뀔 때, ADR-0010) |
 | S→C | `frame_result` | §7.6 업로드 응답과 같은 본문. 업로드가 `202 accepted`였던 프레임의 결과 |
-| S→C | `error` | `code`, `message` (원문 입력을 되돌려 보내지 않음) |
+| S→C | `error` | `code`, `message` (원문 입력을 되돌려 보내지 않음). `capacity_exceeded`는 `active`, `max`, `retry_after_s`를 더 담는다 |
 
 - `alert_sync.last_alert_seq`는 0 이상이다. 아직 alert를 받지 않은 클라이언트(처음 연결)는 0을 보낸다.
 - 알 수 없는 type은 `error(code="unsupported_message_type")`, 알려진 type의 schema 오류는 `error(code="rejected_schema")`를 보내고 무시한다.
@@ -658,12 +683,14 @@ OutputCap = Literal["hud", "speaker", "haptic"]
 - 기본 스타일: `attention_default` = `red`, `top_center`, `large`, `full_screen` 3회(200/200 ms), `show_ms` 4000, 음성, `pattern_a`. `degraded_default` = `yellow`, `top_center`, `normal`, `border` 1회, `show_ms` 3000, 음성, `pattern_b`.
 - 스타일 선택: 관리자 설정 `hud_style_map`에서 `scenario_id` 항목, 없으면 `severity` 항목(notice는 `degraded`), 없으면 기본 스타일 순으로 고른다.
 - `played` ACK는 HUD 표시가 시작된 시점이다. 깜빡임이 끝나기를 기다리지 않는다.
-- 시뮬 페이지는 영상 위에 글래스 표시 영역 비율의 HUD 레이어를 이 규칙으로 그린다. 탐지 박스는 시뮬 화면에서만 켜는 디버그 레이어이고 글래스 HUD에는 그리지 않는다.
+- 시뮬 페이지는 영상 위에 글래스 표시 영역 비율의 HUD 레이어를 이 규칙으로 그린다.
+- **글래스 HUD에는 탐지 박스나 위치를 가리키는 표시를 그리지 않는다 (ADR-0010).** 업로드부터 응답까지 지연이 있고 머리가 움직이므로, 서버가 준 박스는 현재 시야와 어긋난다. 경고는 위치와 무관한 문구로 한다. 시뮬 페이지는 박스를 **판정한 그 프레임** 위에 그린 "판정 프레임" 창에 프레임 나이(촬영 후 경과 시간)와 함께 보여 준다. 그 프레임은 브라우저 메모리에만 두고 표시한 뒤 버린다.
 
 **HUD 상태 표시줄 (ADR-0009 결정 5)**: 경고 팝업과 별개로, HUD 한쪽(기본 `top_right`)에 작은 표시 하나를 항상 둔다. 사용자가 연결, 서버 응답, 감지 상태를 한눈에 알 수 있게 한다. 장치가 자기가 가진 정보만으로 정하고, 글래스와 시뮬 페이지는 같은 규칙을 쓴다. 여러 조건이 겹치면 **위쪽 행이 우선**한다.
 
 | 우선 | 상태 | 조건 (장치가 판단) | 표시 (색 / 문구) | 음성 |
 |---|---|---|---|---|
+| 0 | 정원 초과 | 세션 생성 503 `capacity_exceeded` 또는 제어 WebSocket `error(capacity_exceeded)` 후 close 4503 | 회색 / "정원 초과" | 내장 문구 "동시 접속 정원을 넘었습니다. 잠시 후 다시 시도하세요." 1회 |
 | 1 | 연결 끊김 | 제어 WebSocket이 끊겼거나 `watchdog_ms` 동안 서버 메시지가 없음 | 회색 / "연결 끊김" | 끊긴 순간 내장 문구 1회(기존 watchdog 규칙) |
 | 2 | 서버 오류 | 프레임 업로드가 연속 3회 실패(5xx, 401, 503 `no_model_deployed`, 연결 오류). `409 frame_busy`는 오류로 세지 않음 | 빨강 테두리 / "서버 오류" | 없음 |
 | 3 | 응답 지연 | 마지막 업로드 응답 이후 `2 × frame_interval_ms + VOA_FRAME_SYNC_TIMEOUT_MS` 동안 응답(200, 202, `frame_result`)이 없음 | 노랑 / "응답 지연" | 없음 |
@@ -672,7 +699,7 @@ OutputCap = Literal["hud", "speaker", "haptic"]
 | 6 | 확인 중 | 어느 시나리오든 `candidate` | 노랑 점 / "확인 중" | 없음 |
 | 7 | 정상 | 모든 시나리오가 `clear` 또는 `resolved` | 초록 점 / "정상" | 없음 |
 
-- 시나리오 상태는 가장 최근에 받은 것을 쓴다(업로드 응답의 `states` 또는 `heartbeat.states`). 연결 끊김과 서버 오류일 때는 감지 상태를 표시하지 않는다. 받지 못한 상태를 정상으로 보이게 하지 않기 위해서다(AGENTS 규칙 3).
+- 시나리오 상태는 가장 최근에 받은 것을 쓴다(업로드 응답의 `states` 또는 `heartbeat.states`). 정원 초과, 연결 끊김, 서버 오류일 때는 감지 상태를 표시하지 않는다. 받지 못한 상태를 정상으로 보이게 하지 않기 위해서다(AGENTS 규칙 3).
 - 상태가 바뀌어도 상태 표시줄은 깜빡이거나 음성을 내지 않는다. 사용자 주의를 끄는 것은 `alert`와 `notice`, 그리고 연결이 끊긴 순간의 내장 문구뿐이다.
 - 단색 HUD는 색 대신 문구와 아이콘 모양으로 구분한다. 시뮬 페이지는 같은 표시줄을 HUD 레이어에 그리고, 마지막 응답의 `timing`(왕복 지연, 추론 시간)을 개발용 패널에 따로 보여준다.
 
@@ -733,16 +760,23 @@ OutputCap = Literal["hud", "speaker", "haptic"]
 
 ---
 
+**동시 세션과 추론 자원 (ADR-0010)**
+- 장치 세션 상한은 `VOA_MAX_SESSIONS`(기본 3)다(§7.1 세션 생성, §7.2 WebSocket 정원 초과).
+- 모델 인스턴스는 세션과 미션 사이에 공유한다. 여러 세션의 프레임은 모델별 작업 큐에서 세션 순서대로 번갈아(round-robin) 처리한다.
+- 세션의 평균 `queue_ms`가 그 세션의 `frame_interval_ms`를 넘는 상태가 5초 이상 이어지면, 간격을 1.5배로 늘려 `config`로 알린다(상한 `VOA_FRAME_INTERVAL_MAX_MS`). 평균 대기가 간격의 절반 아래로 10초 이상 내려가면 미션 권장값까지 되돌린다. 간격이 `staleness_ms`를 넘으면 엔진 규칙대로 `unknown`이 된다.
+- `GET /v1/admin/capacity`: 세션 수와 상한, 모델별 처리량(최근 1분), 세션별 실제 간격과 평균 대기
+
 ### 7.6 프레임 업로드 (ADR-0009)
 
 `POST /v1/sessions/{session_id}/frames` — 장치(글래스, 시뮬 페이지)가 카메라 프레임을 올리면 서버가 추론하고 판정한다.
 
 - 인증: `Authorization: Bearer <access token>`(§7.1 세션 범위 규칙)
 - 본문: JPEG 바이트(`Content-Type: image/jpeg`). 긴 변 640px 이하, `VOA_FRAME_MAX_BYTES` 이하
-- 헤더: `X-VOA-Stream-Id`(세션에서 선언한 입력), `X-VOA-Seq`(stream마다 0부터 증가), `X-VOA-Frame-Id`, `X-VOA-Capture-Ts-Ns`(장치 monotonic ns)
+- 헤더: `X-VOA-Stream-Id`(세션에서 선언한 입력), `X-VOA-Seq`(stream마다 0부터 증가), `X-VOA-Frame-Id`, `X-VOA-Capture-Ts-Ns`(장치 monotonic ns), 선택 `X-VOA-Quality-Flags`(QualityFlag 쉼표 목록, §3.2. 예: IMU 회전 속도가 기준을 넘으면 `camera_motion_uncompensated`. 서버는 각 관측의 `quality_flags`에 그대로 넣고, 엔진 `blocking_flags` 규칙이 적용된다, ADR-0010)
+- 조건: 세션에 미션이 정해져 있고 제어 WebSocket이 열려 있어야 한다(§7.2 프레임 전송 시작 조건).
 - 처리:
   1. 검증
-  2. 활성 profile의 시나리오가 요구하는 배치 모델마다 같은 `frame_id`로 `object_detection` Draft 생성(ADR-0004 키)
+  2. 세션 미션의 시나리오가 요구하는 배치 모델마다 같은 `frame_id`로 `object_detection` Draft 생성(ADR-0004 키)
   3. Gateway가 Observation으로 만들어 엔진 `step`
   4. 결과 응답
   - 프레임 바이트와 디코딩 이미지는 처리가 끝나면 버린다. DB, 파일, 로그에 남기지 않는다. `observations_meta`에는 지금처럼 메타데이터만 남긴다.
@@ -762,41 +796,50 @@ OutputCap = Literal["hud", "speaker", "haptic"]
 
 | 상태 | code | 원인 |
 |---|---|---|
-| 400 | `frame_rejected` | 헤더 누락, JPEG 아님, 크기나 해상도 초과 |
+| 400 | `frame_rejected` | 헤더 누락, JPEG 아님, 크기나 해상도 초과, 알 수 없는 품질 플래그 |
 | 400 | `stream_not_declared` | 세션에서 선언하지 않은 stream |
 | 400 | `out_of_order` | seq나 촬영 시각 역행(엔진 admission과 같은 규칙) |
 | 401 | `unauthorized` | token 없음, 무효, 다른 세션 |
 | 409 | `frame_busy` | 같은 stream의 프레임 처리 중 |
-| 503 | `no_model_deployed` | 활성 profile이 요구하는 모델이 배치되지 않음 |
+| 409 | `mission_not_selected` | 세션에 미션이 정해지지 않음 |
+| 409 | `control_not_connected` | 그 세션의 제어 WebSocket이 열려 있지 않음 |
+| 503 | `no_model_deployed` | 세션 미션이 요구하는 모델이 배치되지 않음 |
 
 ### 7.7 관리자 API (ADR-0009)
 
-관리자 API는 장치 token과 분리된 관리자 token으로 보호한다(`Authorization: Bearer <admin token>`, 검증은 `VOA_ADMIN_TOKEN_FILE`의 scrypt digest와 비교). 기본은 `127.0.0.1`에서만 받고, 그 외 bind에서는 TLS가 필수다(§7.1). 관리자 token이 설정되지 않으면 관리자 API는 모두 503 `admin_disabled`다.
+관리자 API는 관리자 계정 로그인 token으로 보호한다(`Authorization: Bearer <token>`, `role=admin`, ADR-0011). 착용자 token이나 장치 세션 token으로는 401이다. 그 외 bind에서는 TLS가 필수다(§7.1).
 
 | 메서드와 경로 | 동작 |
 |---|---|
 | `GET /v1/admin/models` | manifest 목록과 상태: 가중치(`missing`/`sha256_mismatch`/`ready`), 배치(`deployed`, `device`, `score_floor`) |
 | `POST /v1/admin/deployments` `{model_id, device: "cpu"\|"cuda", score_floor}` | sha256을 확인하고 모델을 메모리에 올린다. 다운로드하지 않는다. 여러 모델을 동시에 배치할 수 있다 |
-| `DELETE /v1/admin/deployments/{model_id}` | 해제. 활성 profile이 요구하면 409 `model_in_use` |
-| `GET /v1/admin/profile` | 활성 profile(§4.9 스키마)과 `profile_version` |
-| `POST /v1/admin/profile:validate` | 저장하지 않고 검증만 한다 |
-| `PUT /v1/admin/profile` | 검증 후 `profile_version`을 올려 `VOA_ACTIVE_CONFIG_DIR`에 저장한다. **새로 시작하는 세션부터 적용**한다. 진행 중인 세션은 시작할 때의 profile로 끝까지 판단한다 |
+| `DELETE /v1/admin/deployments/{model_id}` | 해제. 게시된 미션이 요구하면 409 `model_in_use` |
+| `GET /v1/admin/missions`, `POST /v1/admin/missions` `{mission_id, name, description, from_mission_id?}` | 미션 목록(상태, 최신 버전, 사용 중 세션 수), 새 미션(`draft`) 또는 복제 (ADR-0010) |
+| `GET/PUT/DELETE /v1/admin/missions/{id}` | `draft`와 최신 게시본 조회, `draft` 수정, 보관(사용 중이면 409 `mission_in_use`) |
+| `POST /v1/admin/missions/{id}:validate`, `:publish` | `draft` 검증, 게시(검증, 근거 모델 자동 배치, 버전 증가). 게시본은 **새로 시작하거나 미션을 고르는 세션부터** 쓰이고, 진행 중인 세션은 자기 버전으로 끝까지 판단한다 |
+| `GET /v1/admin/missions/{id}/versions` | 버전 목록과 정의 |
+| `GET /v1/admin/capacity` | §7.5 동시 세션과 추론 자원 상태 |
+| `GET /v1/admin/users`, `POST /v1/admin/users/{id}:approve`, `:disable`, `:reset-password` | 착용자 계정 목록(`pending` 먼저), 승인, 사용 중지(진행 중 세션 정리), 임시 비밀번호 발급(다음 로그인 때 변경 필요) (ADR-0011) |
 | `GET /v1/admin/settings`, `PUT /v1/admin/settings` `{frame_interval_ms, hud_styles, hud_style_map}` | 전송과 표시 설정. `frame_interval_ms` 범위는 100~5000이고 진행 중인 세션에도 `config` 메시지로 즉시 알린다. HUD 스타일(§7.4)은 다음 alert부터 적용한다 |
 | `POST /v1/admin/detect?model_id=` (본문 JPEG 1장) | 엔진을 거치지 않고 탐지 결과만 돌려준다. 이미지는 저장하지 않는다 |
 | `GET /v1/admin/changes` | 변경 기록(§8.1 `admin_changes`) |
 
-- profile 검증 순서:
+- **미션 (ADR-0010)**: 사용자가 고르는 목적 단위다. 판정 규칙 `scenarios`, `params`, 근거 모델(`required_models`), `degraded_notice_text`, `hud_style_map`, 권장 `frame_interval_ms`를 묶는다. 미션 한 버전이 엔진 `PolicyProfile` 하나이고(`profile_id = mission_id`), 결정의 `policy_version`은 `<mission_id>@<version>`이다. 상태는 `draft`, `published`, `archived`이고 삭제는 보관이다.
+- 게시 검증 순서:
   1. 스키마(§4.9)
   2. manifest 대조(`check_profile_models`)
-  3. 요구 모델이 모두 배치됨
-  - 실패하면 400 `profile_invalid`, `profile_model_mismatch`, `model_not_deployed` 중 하나를 돌려주고 활성 설정은 바뀌지 않는다.
-- 배치 하한 점수: 실제 Provider 하한은 `min(배치 score_floor, 그 모델을 근거로 쓰는 시나리오의 min_score)`이다. 그래야 profile이 받아들일 근거를 Provider가 먼저 버리지 않는다.
-- 모든 변경(배치, 해제, profile, settings)은 `admin_changes`에 기록한다. 요청 원문과 token은 남기지 않는다.
+  3. 근거 모델 가중치 준비
+  4. 배치(없으면 자동 배치)
+  - 실패하면 400 `profile_invalid`, `profile_model_mismatch`, `model_not_ready` 중 하나이고, 게시본은 이전 버전 그대로다.
+- 저장: `VOA_ACTIVE_CONFIG_DIR/missions/<mission_id>/v<version>.yaml`과 `draft.yaml`. 처음 시작할 때 `config/profiles/*.yaml`을 같은 ID의 미션 v1로 가져온다.
+- 배치 하한 점수: 실제 Provider 하한은 `min(배치 score_floor, 그 모델을 근거로 쓰는 게시 미션 시나리오들의 min_score)`이다. 그래야 profile이 받아들일 근거를 Provider가 먼저 버리지 않는다.
+- 모든 변경(배치, 해제, 미션 생성, 수정, 게시, 보관, settings)은 `admin_changes`에 기록한다. 요청 원문과 token은 남기지 않는다.
 
 ## 8. 저장 / 보안 / 설정
 
 ### 8.1 SQLite (`voa.storage`) 테이블 — 이 목록 외의 테이블/컬럼 금지, BLOB 금지
-- `sessions(session_id PK, device_id, started_at_utc, ended_at_utc NULL)`
+- `sessions(session_id PK, device_id, user_id NULL, started_at_utc, ended_at_utc NULL)` — `user_id`는 착용자 계정 세션(ADR-0011), 장치 credential 세션은 NULL
+- `users(user_id PK, username UNIQUE, display_name NULL, role, status, password_salt_hex, password_digest_hex, password_change_required, created_at_utc, updated_at_utc)` — `role`: `admin`|`wearer`, `status`: `pending`|`active`|`disabled`. 이름 외의 개인정보는 받지 않는다. 보존 기간 정리 대상이 아니다
 - `observations_meta(observation_id PK, session_id, stream_id, source_kind, seq, admission_status, received_at_utc, quality_flags_json, model_id NULL, model_revision NULL)` — payload는 저장하지 않는다
 - `decisions(id INTEGER PK, session_id, risk_event_id, scenario_id, previous_state NULL, state, reason_codes_json, evidence_ids_json, policy_version, decided_at_utc)`
 - `alerts(alert_id PK, session_id, risk_event_id, scenario_id, alert_seq, delivery_state, valid_until_utc, updated_at_utc)`
@@ -806,7 +849,7 @@ OutputCap = Literal["hud", "speaker", "haptic"]
 
 ### 8.2 로그
 - `logging`으로 JSON 한 줄씩 기록한다.
-- 허용 키: `event, session_id, device_id, stream_id, seq, observation_id, scenario_id, state, reason_codes, alert_id, status, latency_us, error_code`
+- 허용 키: `event, session_id, device_id, user_id, stream_id, seq, observation_id, scenario_id, state, reason_codes, alert_id, status, latency_us, error_code` (`username`, `display_name`, 비밀번호는 넣지 않는다, ADR-0011)
 - 이 목록에 없는 키는 포맷터가 버린다. 토큰, secret, payload, text 필드는 구조적으로 로그에 남을 수 없다. 프레임 본문, WebSocket 핸드셰이크 헤더(`Authorization`, `Sec-WebSocket-Protocol`), 관리자 token도 마찬가지다(ADR-0009).
 - `python -m voa.server`는 uvicorn에 `voa.server.logconfig.server_log_config()`를 넘긴다. 서버 로거(`uvicorn`, `uvicorn.error`, `uvicorn.access`, `websockets`, `voa`)는 모두 이 포맷터로 stderr에 쓰고, 자유 문구, 인자, traceback은 출력하지 않는다. `event`가 없는 기록은 logger 이름을 `event`로 쓴다. access log는 끈다.
 - 앱 시작 시 위 로거의 수준을 INFO 이상으로 올린다(낮추지는 않음). uvicorn은 WebSocket 프레임 원문을 `uvicorn.error` DEBUG로 남기므로, uvicorn을 `--log-level debug`로 직접 실행해도 프레임 덤프가 나오지 않게 한다(DAT-02).
@@ -819,7 +862,8 @@ VOA_PORT=8765
 VOA_ALLOW_INSECURE_DEV=true          # pilot 에서는 false 강제
 VOA_TLS_CERT=                        # pilot, 또는 VOA_BIND 가 127.0.0.1 이 아니면 필수 (없으면 시작 거부, ADR-0009)
 VOA_TLS_KEY=
-VOA_POLICY_PROFILE=config/profiles/indoor_research_v0.yaml
+VOA_POLICY_PROFILE=config/profiles/indoor_research_v0.yaml  # 미션 도입 전 단일 profile. 처음 시작 시 미션 v1로 가져옴 (ADR-0010)
+VOA_DEFAULT_MISSION=                 # mission_id 를 생략한 세션의 미션. 비면 장치가 고를 때까지 미션 없음
 VOA_MODELS_DIR=config/models            # 모델 manifest 폴더 (ADR-0004)
 VOA_MODEL_WEIGHTS_DIR=var/models        # 가중치 루트. weights=file 모델은 <dir>/<model_id>/ 에서 읽는다
 VOA_DEVICES_FILE=config/devices.yaml
@@ -838,13 +882,16 @@ VOA_MODEL_AUTO_DOWNLOAD=false
 VOA_FRAME_MAX_BYTES=500000           # 프레임 업로드 최대 크기 (§7.6)
 VOA_FRAME_INTERVAL_MS=333            # 세션 응답의 frame_interval_ms 기본값. 관리자가 100~5000 으로 변경
 VOA_FRAME_SYNC_TIMEOUT_MS=1000       # 이 안에 끝나면 200, 넘으면 202 + frame_result
-VOA_ADMIN_TOKEN_FILE=                # 관리자 token scrypt digest 파일. 비면 관리자 API 503 admin_disabled
-VOA_ACTIVE_CONFIG_DIR=var/config     # 관리자가 적용한 profile 과 settings (버전별 YAML)
+VOA_SIGNUP_ENABLED=true              # 착용자 가입 API (ADR-0011)
+VOA_SIGNUP_REQUIRES_APPROVAL=true    # 가입 후 관리자 승인 필요
+VOA_ACTIVE_CONFIG_DIR=var/config     # 미션(버전별 YAML)과 관리자 settings
+VOA_MAX_SESSIONS=3                   # 동시 장치 세션 상한 (ADR-0010)
+VOA_FRAME_INTERVAL_MAX_MS=1000       # 부하 시 서버가 늘릴 수 있는 프레임 간격 상한
 ```
 
 상대 경로 설정은 서버 작업 디렉터리 `apps/server`를 기준으로 해석한다. 따라서 기본 `config/profiles/...`와 `config/devices.yaml`은 저장소 기준 `apps/server/config/...`를 가리킨다.
 
-숫자 설정은 `FRAME_MAX_BYTES > 0`, `100 <= FRAME_INTERVAL_MS <= 5000`, `FRAME_SYNC_TIMEOUT_MS > 0`, `TICK_INTERVAL_MS > 0`, `HEARTBEAT_MS > 0`, `CLIENT_WATCHDOG_MS >= 2 × HEARTBEAT_MS`, `TOKEN_TTL_S > 0`, `REFRESH_TOKEN_TTL_S >= TOKEN_TTL_S`, `SESSION_SWEEP_INTERVAL_S > 0`, `INPUT_QUEUE_MAX >= 1`, `METADATA_RETENTION_DAYS >= 1`을 만족해야 한다. 위반하면 서버는 시작하지 않는다.
+숫자 설정은 `MAX_SESSIONS >= 1`, `FRAME_INTERVAL_MS <= FRAME_INTERVAL_MAX_MS <= 5000`, `FRAME_MAX_BYTES > 0`, `100 <= FRAME_INTERVAL_MS <= 5000`, `FRAME_SYNC_TIMEOUT_MS > 0`, `TICK_INTERVAL_MS > 0`, `HEARTBEAT_MS > 0`, `CLIENT_WATCHDOG_MS >= 2 × HEARTBEAT_MS`, `TOKEN_TTL_S > 0`, `REFRESH_TOKEN_TTL_S >= TOKEN_TTL_S`, `SESSION_SWEEP_INTERVAL_S > 0`, `INPUT_QUEUE_MAX >= 1`, `METADATA_RETENTION_DAYS >= 1`을 만족해야 한다. 위반하면 서버는 시작하지 않는다.
 
 어떤 모델을 쓸지는 `VOA_POLICY_PROFILE`(시나리오의 `required_models`)과 `VOA_MODELS_DIR`(manifest)이 정한다. `weights: file` 모델의 가중치는 `VOA_MODEL_WEIGHTS_DIR/<model_id>/` 아래에 사용자가 미리 받아 둔 파일만 읽고, 로드 전에 manifest의 `sha256`과 대조한다. 서버는 가중치를 다운로드하지 않는다(`VOA_MODEL_AUTO_DOWNLOAD=false`). manifest 대조가 실패하면 서버는 시작하되 `readyz` 503을 반환하고 엔진은 `ProfileError`로 만든다(INV-10).
 
