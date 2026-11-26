@@ -2,6 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 
     <!-- 원본 미디어와 자격증명이 백업으로 유출되지 않도록 allowBackup을 비활성화한다 -->
@@ -11,15 +13,24 @@
         android:networkSecurityConfig="@xml/network_security_config"
         android:supportsRtl="true">
 
-        <!-- 사용자가 보이는 화면에서 명시적으로 세션을 시작한다 (GATE-C, 8절) -->
+        <!-- 사용자가 보이는 화면에서 명시적으로 세션을 시작한다 (GATE-C, 8절). 로그인과 미션 선택은 세로 고정 (소유자 요구) -->
         <activity
             android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:screenOrientation="portrait"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 감지 화면은 가로 고정 (소유자 요구, AND-03). 어느 쪽으로 눕혀도 가로 -->
+        <activity
+            android:name=".DetectionActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+            android:screenOrientation="sensorLandscape" />
     </application>
 
 </manifest>
