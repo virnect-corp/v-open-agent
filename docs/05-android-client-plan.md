@@ -206,6 +206,8 @@ STOPPED
 
 ### AND-03: 미션 선택과 프레임 업로드
 
+- 상태: DONE (2026-11-26). 로그인과 미션 선택은 세로 고정, 감지 화면은 가로 고정(sensorLandscape, 전체 화면)이고 장치 이름은 입력받지 않고 시스템 기기 이름(없으면 제조사와 모델)을 쓴다(소유자 요구). S22에서 server-vision과 화재 미션으로 폰 카메라가 맥 화면의 산불 영상을 비춰 업로드 수백 장, 실패 0, 왕복 약 380 ms, 추론 약 365 ms, 서버 판정 warning 확인
+
 - 선행: AND-02, TASK-41, TASK-42
 - 산출물: 미션 선택 화면(`GET /v1/missions`, `PUT .../mission`), 감지 화면의 CameraX 미리보기, `FrameUploader`(긴 변 640px JPEG, 진행 중 1개, `frame_interval_ms`와 `config`/`mission` 반영, `auth_ok`와 미션 확정 전에는 0건, 202 후 `frame_result`)
 - 수용: 연결 전 업로드 0건, 간격과 진행 중 1개, 409 `frame_busy`는 오류 아님, 연속 3회 실패 집계, 프레임이 파일과 캐시에 남지 않음

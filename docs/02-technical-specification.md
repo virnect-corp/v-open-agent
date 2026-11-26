@@ -984,6 +984,19 @@ VOA_FRAME_INTERVAL_MAX_MS=1000       # 부하 시 서버가 늘릴 수 있는 �
 | safetensors | Apache-2.0 | no | no |
 | scipy | BSD-3-Clause | no | no |
 
+### 9.1B Android 의존성 (AND-02, AND-03)
+
+`apps/android/gradle/libs.versions.toml`의 직접 의존성이다. 의존성을 추가하면 같은 작업에서 이 표도 갱신한다. 테스트 전용은 앱에 들어가지 않는다.
+
+| 라이브러리 | 버전 | 라이선스 | 쓰는 곳 |
+|---|---|---|---|
+| AndroidX core-ktx, activity-ktx, lifecycle-runtime-ktx, lifecycle-service | 1.15.0, 1.9.3, 2.8.7 | Apache-2.0 | app |
+| AndroidX CameraX core, camera2, lifecycle, view | 1.4.1 | Apache-2.0 | app 감지 화면 미리보기와 프레임 분석 (AND-03) |
+| kotlinx-coroutines-core/android, kotlinx-serialization-json | 1.10.2, 1.8.0 | Apache-2.0 | 전체 |
+| OkHttp | 4.12.0 | Apache-2.0 | session (REST, WebSocket, 프레임 업로드) |
+| kotlin-test, kotlinx-coroutines-test, OkHttp mockwebserver | | Apache-2.0 | 테스트 전용 |
+| JUnit Jupiter | 5.11.4 | EPL-2.0 | 테스트 전용 (앱에 포함되지 않음) |
+
 ### 9.1A 비 Python 도구 (TASK-45)
 
 서버 런타임에 들어가지 않는 개발 도구다. 9.1 검사 대상이 아니라 여기 따로 적는다.
