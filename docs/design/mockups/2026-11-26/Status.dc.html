@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>상태 표시줄과 HUD 축소 규칙</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&amp;family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#8AB4F8}a:hover{color:#B3CEFB}
+</style>
+</helmet>
+<div style="width: 1440px; height: 860px; box-sizing: border-box; padding: 48px 56px; background: #0F1216; color: #E6E9EE; font-family: 'Noto Sans KR', Inter, system-ui, sans-serif; display: flex; gap: 56px">
+
+<section style="width: 560px; display: flex; flex-direction: column; gap: 16px">
+<div>
+<h1 style="margin: 0 0 6px; font-size: 26px; font-weight: 700">상태 표시줄</h1>
+<p style="margin: 0; font-size: 14px; color: #A9B2BD; line-height: 1.6">HUD 오른쪽 위에 항상 보입니다. 여러 조건이 겹치면 위쪽이 우선합니다. 상태가 바뀌어도 깜빡이거나 소리를 내지 않습니다.</p>
+</div>
+<sc-for list="{{ rows }}" as="r" hint-placeholder-count="7">
+<div style="display: flex; align-items: center; gap: 16px; background: #171B21; border: 1px solid #2A3038; border-radius: 12px; padding: 12px 16px">
+<span style="width: 22px; font-size: 13px; color: #9AA4B1; font-family: Inter, sans-serif">{{ r.rank }}</span>
+<div style="display: flex; align-items: center; gap: 8px; width: 128px; padding: 6px 12px; border-radius: 999px; background: #0A0C0F; border: 1px solid {{ r.border }}">
+<span style="width: 10px; height: 10px; border-radius: 50%; background: {{ r.dot }}"></span>
+<span style="font-size: 14px; font-weight: 600; color: {{ r.text }}">{{ r.label }}</span>
+</div>
+<span style="flex: 1; font-size: 13px; color: #C3CAD3; line-height: 1.5">{{ r.cond }}</span>
+</div>
+</sc-for>
+<p style="margin: 4px 0 0; font-size: 13px; color: #A9B2BD; line-height: 1.6">연결 끊김과 서버 오류일 때는 감지 상태를 숨깁니다. 받지 못한 상태가 정상처럼 보이지 않게 하기 위해서입니다.</p>
+</section>
+
+<section style="flex: 1; display: flex; flex-direction: column; gap: 16px">
+<div>
+<h1 style="margin: 0 0 6px; font-size: 26px; font-weight: 700">같은 경고, 기종별 표시</h1>
+<p style="margin: 0; font-size: 14px; color: #A9B2BD; line-height: 1.6">서버는 같은 presentation을 모든 기종에 보냅니다. 기종이 선언한 capabilities.hud에 따라 정해진 순서로 낮춰 그립니다. 시뮬 페이지에서 기종을 바꿔 미리 볼 수 있습니다.</p>
+</div>
+
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px">
+
+<div style="display: flex; flex-direction: column; gap: 10px">
+<div style="position: relative; aspect-ratio: 4 / 3; background: #05070A; border-radius: 12px; border: 1px solid #2A3038; overflow: hidden">
+<div style="position: absolute; inset: 0; background: #F0524A; opacity: .35"></div>
+<div style="position: absolute; left: 50%; top: 16px; transform: translateX(-50%); width: 80%; background: rgba(240,82,74,.95); color: #FFFFFF; border-radius: 8px; padding: 10px 12px; font-size: 15px; font-weight: 700; line-height: 1.4; text-align: center">불꽃으로 보이는 것이 감지되었습니다. 주변을 확인하세요.</div>
+<div style="position: absolute; right: 10px; bottom: 10px; display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: rgba(10,12,15,.8); border: 1px solid #F0524A"><span style="width: 8px; height: 8px; border-radius: 50%; background: #F0524A"></span><span style="font-size: 12px; font-weight: 600; color: #FFB4AE">경고</span></div>
+</div>
+<strong style="font-size: 15px">컬러 HUD</strong>
+<span style="font-size: 13px; color: #A9B2BD; line-height: 1.5">빨강, 전체 화면 3회 깜빡임 (200/200 ms), 4초 유지, 음성, 진동 A</span>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 10px">
+<div style="position: relative; aspect-ratio: 4 / 3; background: #05070A; border-radius: 12px; border: 6px solid #E6E9EE; box-sizing: border-box; overflow: hidden">
+<div style="position: absolute; left: 50%; top: 12px; transform: translateX(-50%); width: 82%; background: #E6E9EE; color: #05070A; border-radius: 8px; padding: 10px 12px; font-size: 15px; font-weight: 700; line-height: 1.4; text-align: center">불꽃으로 보이는 것이 감지되었습니다. 주변을 확인하세요.</div>
+<div style="position: absolute; right: 8px; bottom: 8px; display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: #05070A; border: 1px solid #E6E9EE"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 1 9 9H1z" fill="#E6E9EE"></path></svg><span style="font-size: 12px; font-weight: 700; color: #E6E9EE">경고</span></div>
+</div>
+<strong style="font-size: 15px">단색 HUD, 테두리 깜빡임</strong>
+<span style="font-size: 13px; color: #A9B2BD; line-height: 1.5">색 대신 반전 강조, 전체 화면 깜빡임 대신 테두리, 상태는 아이콘 모양으로 구분</span>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 10px">
+<div style="position: relative; aspect-ratio: 4 / 3; background: #05070A; border-radius: 12px; border: 1px solid #2A3038; overflow: hidden">
+<div style="position: absolute; left: 50%; top: 16px; transform: translateX(-50%); width: 82%; background: #E6E9EE; color: #05070A; border-radius: 8px; padding: 10px 12px; font-size: 15px; font-weight: 700; line-height: 1.4; text-align: center">불꽃으로 보이는 것이 감지되었습니다. 주변을 확인하세요.</div>
+<div style="position: absolute; right: 10px; bottom: 10px; display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: #05070A; border: 1px solid #E6E9EE"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M5 1 9 9H1z" fill="#E6E9EE"></path></svg><span style="font-size: 12px; font-weight: 700; color: #E6E9EE">경고</span></div>
+</div>
+<strong style="font-size: 15px">단색 HUD, 깜빡임 없음</strong>
+<span style="font-size: 13px; color: #A9B2BD; line-height: 1.5">문구와 진동만 (capabilities.hud 미선언 시 최소값)</span>
+</div>
+</div>
+
+<div style="background: #171B21; border: 1px solid #2A3038; border-radius: 12px; padding: 16px 20px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 24px; font-size: 13px; color: #C3CAD3; line-height: 1.5">
+<span><strong style="color: #E6E9EE">깜빡임 축소 순서</strong>  전체 화면 → 테두리 → 없음</span>
+<span><strong style="color: #E6E9EE">played ACK</strong>  HUD 표시 시작 시점 (깜빡임 종료를 기다리지 않음)</span>
+<span><strong style="color: #E6E9EE">문구</strong>  승인된 템플릿, 최대 2줄, 넘으면 말줄임</span>
+<span><strong style="color: #E6E9EE">탐지 박스</strong>  시뮬 화면의 디버그 레이어, 글래스에는 그리지 않음</span>
+</div>
+</section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":860}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const RED = '#F0524A', AMBER = '#E3A72F', GREEN = '#3DB46D', GRAY = '#8A94A1';
+    return {
+      rows: [
+        { rank: '1', label: '연결 끊김', dot: GRAY, text: '#C3CAD3', border: GRAY, cond: '제어 연결이 끊겼거나 watchdog(3초) 동안 서버 메시지 없음. 끊긴 순간 내장 문구 음성 1회' },
+        { rank: '2', label: '서버 오류', dot: RED, text: '#FFB4AE', border: RED, cond: '프레임 업로드 연속 3회 실패 (5xx, 401, 503 no_model_deployed, 연결 오류). 409 busy는 제외' },
+        { rank: '3', label: '응답 지연', dot: AMBER, text: '#F4D48A', border: AMBER, cond: '2 × 프레임 간격 + 동기 한도 동안 업로드 응답이나 frame_result 없음' },
+        { rank: '4', label: '경고', dot: RED, text: '#FFB4AE', border: RED, cond: '어느 시나리오든 warning. 팝업, 깜빡임, 음성은 alert presentation이 담당' },
+        { rank: '5', label: '판단 불가', dot: GRAY, text: '#C3CAD3', border: '#4A535E', cond: '어느 시나리오든 unknown. notice가 오면 그 presentation대로 표시' },
+        { rank: '6', label: '확인 중', dot: AMBER, text: '#F4D48A', border: '#4A535E', cond: '어느 시나리오든 candidate' },
+        { rank: '7', label: '정상', dot: GREEN, text: '#A6E3BD', border: '#4A535E', cond: '모든 시나리오가 clear 또는 resolved' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

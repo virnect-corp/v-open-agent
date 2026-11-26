@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>VOA 관리자</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&amp;family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0F1216}
+a{color:#8AB4F8}a:hover{color:#B3CEFB}
+button{font-family:inherit}
+</style>
+</helmet>
+<div style="min-height: 1180px; background: #0F1216; color: #E6E9EE; font-family: 'Noto Sans KR', Inter, system-ui, sans-serif; display: flex; flex-direction: column">
+
+<header style="display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding: 14px 24px; border-bottom: 1px solid #2A3038">
+<h1 style="margin: 0; font-size: 17px; font-weight: 700">VOA 관리자</h1>
+<span style="font-size: 13px; color: #9AA4B1">서버 127.0.0.1:8765, 활성 profile fire_c1 v2, 진행 중 세션 1</span>
+<span style="margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 13px; color: #A6E3BD"><span style="width: 8px; height: 8px; border-radius: 50%; background: #3DB46D"></span>관리자 token 인증됨</span>
+</header>
+
+<div style="display: flex; flex-wrap: wrap; gap: 24px; padding: 24px">
+
+<nav aria-label="관리 메뉴" style="flex: 1 1 200px; max-width: 220px; display: flex; flex-direction: column; gap: 4px">
+<a href="#models" style="padding: 10px 12px; border-radius: 8px; background: #1F252D; color: #E6E9EE; text-decoration: none; font-size: 14px">모델 배치</a>
+<a href="#policy" style="padding: 10px 12px; border-radius: 8px; color: #C3CAD3; text-decoration: none; font-size: 14px">시나리오와 임계값</a>
+<a href="#transport" style="padding: 10px 12px; border-radius: 8px; color: #C3CAD3; text-decoration: none; font-size: 14px">프레임 간격과 HUD</a>
+<a href="#detect" style="padding: 10px 12px; border-radius: 8px; color: #C3CAD3; text-decoration: none; font-size: 14px">이미지 한 장 시험</a>
+<a href="#changes" style="padding: 10px 12px; border-radius: 8px; color: #C3CAD3; text-decoration: none; font-size: 14px">변경 기록</a>
+</nav>
+
+<div style="flex: 999 1 640px; min-width: 0; display: flex; flex-direction: column; gap: 20px">
+
+<section id="models" style="background: #171B21; border: 1px solid #2A3038; border-radius: 12px; padding: 20px">
+<div style="display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px">
+<h2 style="margin: 0; font-size: 17px">모델 배치</h2>
+<span style="font-size: 13px; color: #9AA4B1">여러 모델을 동시에 배치할 수 있습니다. 가중치는 로컬 파일만 읽고 sha256을 확인합니다.</span>
+</div>
+<div style="overflow-x: auto">
+<table style="width: 100%; border-collapse: collapse; font-size: 14px; min-width: 640px">
+<thead><tr style="color: #9AA4B1; text-align: left"><th style="padding: 8px; font-weight: 500">모델</th><th style="padding: 8px; font-weight: 500">labels</th><th style="padding: 8px; font-weight: 500">가중치</th><th style="padding: 8px; font-weight: 500">상태</th><th style="padding: 8px; font-weight: 500">장치 / 하한</th><th style="padding: 8px"></th></tr></thead>
+<tbody>
+<sc-for list="{{ models }}" as="m" hint-placeholder-count="4">
+<tr style="border-top: 1px solid #232932">
+<td style="padding: 10px 8px; font-family: Inter, sans-serif">{{ m.id }}</td>
+<td style="padding: 10px 8px; color: #C3CAD3; font-family: Inter, sans-serif">{{ m.labels }}</td>
+<td style="padding: 10px 8px; color: {{ m.weightColor }}">{{ m.weights }}</td>
+<td style="padding: 10px 8px; color: {{ m.stateColor }}">{{ m.state }}</td>
+<td style="padding: 10px 8px; color: #C3CAD3; font-family: Inter, sans-serif">{{ m.device }}</td>
+<td style="padding: 10px 8px; text-align: right"><button type="button" onClick="{{ m.toggle }}" style="height: 36px; padding: 0 14px; border-radius: 8px; font-size: 13px; cursor: pointer; background: {{ m.btnBg }}; color: #E6E9EE; border: 1px solid #3A424D">{{ m.action }}</button></td>
+</tr>
+</sc-for>
+</tbody>
+</table>
+</div>
+<p style="margin: 10px 0 0; font-size: 13px; color: #9AA4B1">활성 profile이 쓰는 모델(rtdetr-r18-dfire)은 해제할 수 없습니다 (409 model_in_use).</p>
+</section>
+
+<section id="policy" style="background: #171B21; border: 1px solid #2A3038; border-radius: 12px; padding: 20px">
+<div style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; margin-bottom: 14px">
+<h2 style="margin: 0; font-size: 17px">시나리오와 임계값</h2>
+<span style="font-size: 13px; color: #9AA4B1">fire_c1 v2 편집 중. 적용하면 v3이 되고 새로 시작하는 세션부터 쓰입니다.</span>
+</div>
+<div style="border: 1px solid #2A3038; border-radius: 10px; padding: 16px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 24px">
+<div style="grid-column: 1 / -1; display: flex; align-items: center; gap: 12px"><strong style="font-family: Inter, sans-serif; font-size: 15px">fire_in_view</strong><span style="font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #3A1F1E; color: #FFB4AE">attention</span></div>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #C3CAD3">근거 모델
+<select style="height: 40px; background: #0F1216; color: #E6E9EE; border: 1px solid #3A424D; border-radius: 8px; padding: 0 10px; font-family: Inter, sans-serif"><option>rtdetr-r18-dfire</option><option>omdet-turbo-fire</option></select>
+</label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #C3CAD3">labels
+<input type="text" value="fire" style="height: 40px; background: #0F1216; color: #E6E9EE; border: 1px solid #3A424D; border-radius: 8px; padding: 0 10px; font-family: Inter, sans-serif">
+</label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #C3CAD3">min_score <span style="font-family: Inter, sans-serif; color: #E6E9EE">{{ minScoreText }}</span>
+<input type="range" min="1" max="50" value="{{ minScore }}" onInput="{{ setMinScore }}" style="width: 100%">
+<span style="font-size: 12px; color: #9AA4B1">val 측정: 0.060에서 오검출 1%, 0.041에서 5%</span>
+</label>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px">
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #C3CAD3">confirm_frames<input type="number" value="3" style="height: 40px; background: #0F1216; color: #E6E9EE; border: 1px solid #3A424D; border-radius: 8px; padding: 0 10px"></label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #C3CAD3">clear_frames<input type="number" value="3" style="height: 40px; background: #0F1216; color: #E6E9EE; border: 1px solid #3A424D; border-radius: 8px; padding: 0 10px"></label>
+</div>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #C3CAD3">ROI
+<input type="text" value="0, 0, 1, 1 (시야 전체)" style="height: 40px; background: #0F1216; color: #E6E9EE; border: 1px solid #3A424D; border-radius: 8px; padding: 0 10px">
+</label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #C3CAD3">경고 문구 (승인된 템플릿)
+<input type="text" value="불꽃으로 보이는 것이 감지되었습니다. 주변을 확인하세요." style="height: 40px; background: #0F1216; color: #E6E9EE; border: 1px solid #3A424D; border-radius: 8px; padding: 0 10px">
+</label>
+</div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px">
+<button type="button" onClick="{{ validate }}" style="height: 40px; padding: 0 16px; border-radius: 8px; background: #1F252D; color: #E6E9EE; border: 1px solid #3A424D; font-size: 14px; cursor: pointer">검증</button>
+<button type="button" style="height: 40px; padding: 0 16px; border-radius: 8px; background: #2F6FED; color: #FFFFFF; border: 1px solid #2F6FED; font-size: 14px; cursor: pointer">적용 (새 세션부터)</button>
+<sc-if value="{{ validated }}" hint-placeholder-val="{{ false }}">
+<span style="font-size: 13px; color: #A6E3BD">검증 통과: 스키마, manifest 대조, 요구 모델 배치 확인</span>
+</sc-if>
+</div>
+</section>
+
+<section id="transport" style="background: #171B21; border: 1px solid #2A3038; border-radius: 12px; padding: 20px">
+<div style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; margin-bottom: 14px">
+<h2 style="margin: 0; font-size: 17px">프레임 간격과 HUD</h2>
+<span style="font-size: 13px; color: #9AA4B1">판단 규칙이 아니라 표시와 전송 설정이라 진행 중인 세션에도 바로 적용됩니다.</span>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 20px">
+<div style="flex: 1 1 260px; display: flex; flex-direction: column; gap: 12px">
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #C3CAD3">프레임 간격 (100~5000 ms)
+<input type="number" value="333" style="height: 40px; background: #0F1216; color: #E6E9EE; border: 1px solid #3A424D; border-radius: 8px; padding: 0 10px">
+<span style="font-size: 12px; color: #9AA4B1">약 3 fps. 저장하면 진행 중인 세션에 config 메시지로 알립니다.</span>
+</label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #C3CAD3">스타일 연결 (시나리오 &gt; 등급 &gt; 기본)
+<span style="font-family: Inter, sans-serif; font-size: 13px; color: #E6E9EE; background: #0F1216; border: 1px solid #3A424D; border-radius: 8px; padding: 10px">attention → attention_default<br>degraded → degraded_default</span>
+</label>
+</div>
+<div style="flex: 2 1 380px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px">
+<div style="border: 1px solid #2A3038; border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 10px">
+<strong style="font-family: Inter, sans-serif; font-size: 14px">attention_default</strong>
+<div style="position: relative; aspect-ratio: 16 / 9; background: #05070A; border-radius: 8px; overflow: hidden">
+<div style="position: absolute; inset: 0; background: #F0524A; opacity: .3"></div>
+<div style="position: absolute; left: 50%; top: 10px; transform: translateX(-50%); width: 84%; background: rgba(240,82,74,.95); color: #FFFFFF; border-radius: 6px; padding: 6px 8px; font-size: 12px; font-weight: 700; text-align: center">불꽃으로 보이는 것이 감지되었습니다.</div>
+</div>
+<span style="font-size: 12px; color: #A9B2BD; line-height: 1.6">빨강, 상단 중앙, 크게, 전체 화면 3회, 4000 ms, 음성, 진동 A</span>
+<button type="button" style="height: 36px; border-radius: 8px; background: #1F252D; color: #E6E9EE; border: 1px solid #3A424D; font-size: 13px; cursor: pointer">편집</button>
+</div>
+<div style="border: 1px solid #2A3038; border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 10px">
+<strong style="font-family: Inter, sans-serif; font-size: 14px">degraded_default</strong>
+<div style="position: relative; aspect-ratio: 16 / 9; background: #05070A; border-radius: 8px; overflow: hidden; border: 4px solid #E3A72F; box-sizing: border-box">
+<div style="position: absolute; left: 50%; top: 8px; transform: translateX(-50%); width: 86%; background: rgba(227,167,47,.95); color: #1A1405; border-radius: 6px; padding: 6px 8px; font-size: 12px; font-weight: 700; text-align: center">카메라 상태를 확인할 수 없어 감지가 제한됩니다.</div>
+</div>
+<span style="font-size: 12px; color: #A9B2BD; line-height: 1.6">노랑, 상단 중앙, 보통, 테두리 1회, 3000 ms, 음성, 진동 B</span>
+<button type="button" style="height: 36px; border-radius: 8px; background: #1F252D; color: #E6E9EE; border: 1px solid #3A424D; font-size: 13px; cursor: pointer">편집</button>
+</div>
+</div>
+</div>
+</section>
+
+<div style="display: flex; flex-wrap: wrap; gap: 20px">
+<section id="detect" style="flex: 1 1 320px; background: #171B21; border: 1px solid #2A3038; border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 12px">
+<h2 style="margin: 0; font-size: 17px">이미지 한 장 시험</h2>
+<span style="font-size: 13px; color: #9AA4B1">엔진을 거치지 않고 탐지 결과만 봅니다. 이미지는 저장하지 않습니다.</span>
+<div style="border: 1px dashed #3A424D; border-radius: 10px; height: 120px; display: flex; align-items: center; justify-content: center; color: #8A94A1; font-size: 13px">JPEG 끌어다 놓기 또는 선택</div>
+<div style="font-size: 13px; color: #C3CAD3; font-family: Inter, 'Noto Sans KR', sans-serif">rtdetr-r18-dfire, fire 0.08 [0.41, 0.32, 0.55, 0.61], 314 ms</div>
+</section>
+
+<section id="changes" style="flex: 1 1 320px; background: #171B21; border: 1px solid #2A3038; border-radius: 12px; padding: 20px">
+<h2 style="margin: 0 0 12px; font-size: 17px">변경 기록</h2>
+<div style="display: flex; flex-direction: column; gap: 8px; font-size: 13px; color: #C3CAD3; font-family: Inter, 'Noto Sans KR', sans-serif">
+<sc-for list="{{ changes }}" as="c" hint-placeholder-count="4">
+<div style="display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px solid #232932; padding-bottom: 8px"><span>{{ c.what }}</span><span style="color: #9AA4B1; white-space: nowrap">{{ c.when }}</span></div>
+</sc-for>
+</div>
+</section>
+</div>
+
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1180}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { minScore: 5, validated: false, deployed: { 'rtdetr-r18-dfire': true, 'rtdetr-r18-coco': true, 'omdet-turbo-fire': false, 'mock-detector': false } };
+  }
+  renderVals() {
+    const base = [
+      { id: 'rtdetr-r18-dfire', labels: 'smoke, fire', weights: '준비됨 (sha256 일치)', ok: true, inUse: true, device: 'cpu / 0.05' },
+      { id: 'rtdetr-r18-coco', labels: 'person', weights: '준비됨 (sha256 일치)', ok: true, inUse: false, device: 'cpu / 0.25' },
+      { id: 'omdet-turbo-fire', labels: 'fire, smoke', weights: '준비됨 (sha256 일치)', ok: true, inUse: false, device: '-' },
+      { id: 'mock-detector', labels: 'person, obstacle', weights: '내장 (builtin)', ok: true, inUse: false, device: '-' }
+    ];
+    const dep = this.state.deployed;
+    return {
+      models: base.map((m) => {
+        const on = dep[m.id];
+        return {
+          ...m,
+          weightColor: '#A6E3BD',
+          state: on ? (m.inUse ? '배치됨, 사용 중' : '배치됨') : '미배치',
+          stateColor: on ? '#A6E3BD' : '#9AA4B1',
+          action: on ? '해제' : '배치',
+          btnBg: on ? '#1F252D' : '#23324A',
+          toggle: () => { if (m.inUse && on) return; this.setState({ deployed: { ...dep, [m.id]: !on } }); }
+        };
+      }),
+      minScore: this.state.minScore,
+      minScoreText: (this.state.minScore / 100).toFixed(2),
+      setMinScore: (e) => this.setState({ minScore: Number(e.target.value), validated: false }),
+      validated: this.state.validated,
+      validate: () => this.setState({ validated: true }),
+      changes: [
+        { what: 'profile fire_c1 v1 → v2 (근거 모델, min_score)', when: '11-26 10:41' },
+        { what: '배치 rtdetr-r18-dfire (cpu)', when: '11-26 10:39' },
+        { what: '프레임 간격 500 → 333 ms', when: '11-26 10:20' },
+        { what: '해제 omdet-turbo-fire', when: '11-26 10:18' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>
