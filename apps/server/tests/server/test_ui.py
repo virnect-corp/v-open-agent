@@ -73,3 +73,9 @@ def test_page_files_have_no_inline_script_or_external_origin(
         text = (folder / name).read_text(encoding="utf-8")
         assert "http://" not in text and "https://" not in text, name
         assert "·" not in text, name
+
+
+def test_the_admin_menu_opens_the_sim_page_and_hands_over_by_message_only() -> None:
+    source = (UI_ROOT / "admin" / "app.js").read_text(encoding="utf-8")
+    assert 'window.open("/ui/sim"' in source and "answerHandoff" in source
+    assert "?token" not in source and "#token" not in source

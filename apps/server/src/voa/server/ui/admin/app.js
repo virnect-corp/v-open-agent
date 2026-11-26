@@ -4,6 +4,7 @@ import {
   AdminController,
   TABS,
   addScenario,
+  answerHandoff,
   applyJson,
   createApi,
   editorJson,
@@ -27,7 +28,32 @@ const WEIGHT_NAMES = { ready: "준비됨", missing: "없음", sha256_mismatch: "
 const USER_STATUS = { pending: "승인 대기", active: "사용 중", disabled: "사용 중지" };
 
 const root = document.getElementById("app");
-const controller = new AdminController(createApi(window.fetch.bind(window)), render);
+const api = createApi(window.fetch.bind(window));
+const controller = new AdminController(api, render);
+
+// "시뮬레이터": open the sim page and hand it this login (no second login, TASK-46A)
+// The login is checked first: the server forgets logins when it restarts, and the page
+// would otherwise hand over a token the server no longer accepts.
+let simWindow = null;
+let simCheck = null;
+window.addEventListener("message", async (event) => {
+  if (simWindow === null || event.source !== simWindow) return;
+  const valid = simCheck ? await simCheck : false;
+  if (!valid) {
+    simWindow.close();
+    simWindow = null;
+    return;
+  }
+  answerHandoff(event, window.origin, simWindow, api);
+});
+function openSim() {
+  simWindow = window.open("/ui/sim", "voa-sim"); // in the click, so it is not a blocked popup
+  if (simWindow === null) {
+    controller.set({ error: "브라우저가 새 창을 막았습니다. 이 주소의 팝업을 허용한 뒤 다시 누르세요." });
+    return;
+  }
+  simCheck = controller.verifyLogin();
+}
 
 function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
@@ -148,6 +174,7 @@ function mainView(state) {
       { class: "top" },
       h("strong", {}, "VOA 관리자"),
       h("span", { class: "muted" }, `${state.username ?? ""} 로그인`),
+      h("button", { class: "link right", onclick: openSim }, "시뮬레이터"),
       h("button", { class: "link", onclick: () => controller.logout() }, "로그아웃"),
     ),
     nav,

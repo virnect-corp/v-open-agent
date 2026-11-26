@@ -283,3 +283,30 @@ test("the page code never touches browser storage, cookies or the URL", () => {
     }
   }
 });
+
+test("the sim handoff answers only the window this page opened, same origin, once logged in", async () => {
+  const { answerHandoff, HANDOFF_READY, HANDOFF_LOGIN } = await import("../../src/voa/server/ui/admin/core.js");
+  const posted = [];
+  const sim = { postMessage: (data, origin) => posted.push({ data, origin }) };
+  const other = { postMessage: () => assert.fail("must not answer another window") };
+  const api = createApi(async () => respond(200, {}));
+  const ready = (source, origin = "http://127.0.0.1:8765", type = HANDOFF_READY) => ({ source, origin, data: { type } });
+  assert.equal(answerHandoff(ready(sim), "http://127.0.0.1:8765", sim, api), false, "not logged in yet");
+  api.setToken(TOKEN);
+  assert.equal(answerHandoff(ready(other), "http://127.0.0.1:8765", sim, api), false);
+  assert.equal(answerHandoff(ready(sim, "http://evil.test"), "http://127.0.0.1:8765", sim, api), false);
+  assert.equal(answerHandoff(ready(sim, undefined, "other"), "http://127.0.0.1:8765", sim, api), false);
+  assert.equal(answerHandoff(ready(sim), "http://127.0.0.1:8765", null, api), false);
+  assert.equal(answerHandoff(ready(sim), "http://127.0.0.1:8765", sim, api), true);
+  assert.deepEqual(posted, [{ data: { type: HANDOFF_LOGIN, token: TOKEN }, origin: "http://127.0.0.1:8765" }]);
+});
+
+test("before handing the login to the sim window it is checked; an expired one logs out", async () => {
+  const valid = await loggedIn({ "GET /v1/admin/capacity": [200, { sessions: 0, max_sessions: 3 }] });
+  assert.equal(await valid.controller.verifyLogin(), true);
+  const expired = await loggedIn({ "GET /v1/admin/capacity": [401, { code: "unauthorized" }] });
+  assert.equal(await expired.controller.verifyLogin(), false);
+  assert.equal(expired.controller.state.screen, "login");
+  assert.equal(expired.controller.state.error, message("unauthorized"));
+  assert.equal(expired.controller.api.hasToken(), false);
+});

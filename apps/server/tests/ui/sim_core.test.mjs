@@ -349,3 +349,45 @@ test("the page code never touches browser storage, cookies or the URL", () => {
     }
   }
 });
+
+test("admin handoff: only the opener's same-origin login message is taken, then no login form", async () => {
+  const { acceptHandoff, HANDOFF_LOGIN } = await import("../../src/voa/server/ui/sim/core.js");
+  const opener = {};
+  const origin = "http://127.0.0.1:8765";
+  const msg = (source, from = origin, data = { type: HANDOFF_LOGIN, token: "admin-login-tok" }) => ({ source, origin: from, data });
+  assert.equal(acceptHandoff(msg(opener), origin, opener), "admin-login-tok");
+  assert.equal(acceptHandoff(msg({}), origin, opener), null);
+  assert.equal(acceptHandoff(msg(opener, "http://evil.test"), origin, opener), null);
+  assert.equal(acceptHandoff(msg(opener, origin, { type: "x", token: "t" }), origin, opener), null);
+  assert.equal(acceptHandoff(msg(opener), origin, null), null);
+
+  const h = harness();
+  await h.controller.loginAsAdmin("admin-login-tok");
+  const call = h.calls[0];
+  assert.equal(call.path, "/v1/sessions");
+  assert.equal(call.headers.Authorization, "Bearer admin-login-tok");
+  const body = JSON.parse(call.body);
+  assert.ok(!("username" in body) && !("password" in body));
+  assert.deepEqual(body.capabilities.inputs, ["camera_0"]);
+  assert.equal(h.controller.state.screen, "missions");
+  assert.deepEqual(FakeSocket.last.protocols, ["voa.v1", "voa.bearer.tok-SECRET-1"], "then the session token");
+});
+
+test("a refused admin handoff says the admin login ended instead of a password error", async () => {
+  const h = harness({ "POST /v1/sessions": [401, { code: "unauthorized" }] });
+  await h.controller.loginAsAdmin("expired-tok");
+  assert.equal(h.controller.state.screen, "login");
+  assert.equal(h.controller.state.error, message("admin_login_expired"));
+  const plain = harness({ "POST /v1/sessions": [401, { code: "unauthorized" }] });
+  await plain.controller.login("kim", "x");
+  assert.equal(plain.controller.state.error, message("unauthorized"));
+});
+
+
+test("the page asks the admin page for its login exactly once, at start", () => {
+  const source = readFileSync(new URL("../../src/voa/server/ui/sim/app.js", import.meta.url), "utf8");
+  const calls = source.split("\n").filter((line) => /^\s*adminHandoff\(\);/.test(line));
+  assert.equal(calls.length, 1, "one call");
+  assert.match(calls[0], /^adminHandoff\(\);/, "at module top level, not inside a callback");
+  assert.ok(source.trimEnd().split("\n").at(-1).startsWith("adminHandoff();"), "after the first render");
+});

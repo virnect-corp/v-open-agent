@@ -44,7 +44,7 @@ h3 { font-size: 1rem; margin: 1.2rem 0 0.4rem; }
 
 .shell { max-width: 1200px; margin: 0 auto; padding: 0 16px 48px; }
 .top { display: flex; gap: 1rem; align-items: center; padding: 0.9rem 0; }
-.top .link { margin-left: auto; }
+.top .right { margin-left: auto; }
 .tabs { display: flex; gap: 0.3rem; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin-bottom: 1rem; }
 .tab { border: none; background: none; padding: 0.6rem 0.9rem; border-bottom: 2px solid transparent; color: var(--muted); }
 .tab.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }

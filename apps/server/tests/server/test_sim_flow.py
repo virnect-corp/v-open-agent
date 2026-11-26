@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.testclient import WebSocketTestSession
 
-from tests.server.test_admin_missions import Admin
+from tests.server.test_admin_missions import ADMIN_PASSWORD, Admin
 from tests.server.test_frames import jpeg, make_client, next_of, workdir  # noqa: F401
 
 HUD = {"color": False, "flash_modes": ["none", "border"], "max_lines": 2}
@@ -112,3 +112,53 @@ def test_a_browser_token_in_the_wrong_subprotocol_form_is_refused(client: TestCl
             subprotocols=[f"voa.bearer.{session['token']}"],  # missing voa.v1
         ) as ws:
             ws.receive_json()
+
+
+def admin_session_body(password: str) -> dict[str, Any]:
+    return {
+        "username": "admin",
+        "password": password,
+        "device_label": "sim",
+        "capabilities": {"inputs": ["camera_0"], "outputs": ["hud", "speaker"], "hud": HUD},
+    }
+
+
+def test_an_admin_can_run_the_sim_page_after_changing_the_default_password(
+    client: TestClient,
+) -> None:
+    refused = client.post("/v1/sessions", json=admin_session_body("admin"))
+    assert refused.status_code == 403 and refused.json() == {"code": "password_change_required"}
+    admin = Admin(client)  # changes the default password
+    created = client.post("/v1/sessions", json=admin_session_body(ADMIN_PASSWORD))
+    assert created.status_code == 200
+    session = created.json()
+    with browser_socket(client, session) as ws:
+        next_of(ws, "auth_ok")
+        assert next_of(ws, "mission")["mission_id"] == "indoor_research_v0"
+    runtime = client.app.state.runtime  # type: ignore[attr-defined]
+    assert runtime.session_started[session["session_id"]][2] is not None  # recorded as the admin
+    assert admin.get("/capacity").json()["sessions"] == 1
+
+
+def test_the_admin_login_token_opens_a_sim_session_without_a_second_login(
+    client: TestClient,
+) -> None:
+    caps = {"capabilities": {"inputs": ["camera_0"], "outputs": ["hud"], "hud": HUD}}
+    first = client.post("/v1/auth/login", json={"username": "admin", "password": "admin"}).json()
+    default = client.post(
+        "/v1/sessions", json=caps, headers={"Authorization": f"Bearer {first['token']}"}
+    )
+    assert default.status_code == 403 and default.json() == {"code": "password_change_required"}
+    admin = Admin(client)
+    created = client.post("/v1/sessions", json=caps, headers=admin.headers)
+    assert created.status_code == 200
+    with browser_socket(client, created.json()) as ws:
+        assert next_of(ws, "auth_ok")["session_id"] == created.json()["session_id"]
+    assert client.post("/v1/sessions", json=caps).json() == {"code": "invalid_request"}
+    bad = client.post("/v1/sessions", json=caps, headers={"Authorization": "Bearer nope"})
+    assert bad.status_code == 401
+    wearer = wearer_session(client)  # a session token is not a login token
+    as_session = client.post(
+        "/v1/sessions", json=caps, headers={"Authorization": f"Bearer {wearer['token']}"}
+    )
+    assert as_session.status_code == 401

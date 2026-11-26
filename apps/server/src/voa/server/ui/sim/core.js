@@ -23,6 +23,8 @@ export const MESSAGES = {
   mission_not_found: "미션을 찾을 수 없습니다.",
   not_ready: "서버가 아직 준비되지 않았습니다.",
   network: "서버에 연결할 수 없습니다.",
+  admin_login_expired: "관리자 로그인이 끝났습니다. 관리자 페이지에서 다시 로그인한 뒤 시뮬레이터를 누르세요.",
+  admin_handoff_missing: "관리자 페이지에서 로그인 정보를 받지 못했습니다. 관리자 페이지의 시뮬레이터 버튼으로 다시 열거나 여기서 로그인하세요.",
 };
 
 export function message(code) {
@@ -96,6 +98,19 @@ export function statusBar(input) {
   if (values.length === 0 || values.includes("unknown")) return pick("unknown", true); // nothing received is not normal
   if (values.includes("candidate")) return pick("candidate", true);
   return pick("normal", true);
+}
+
+// --- admin handoff (TASK-46A) ---
+
+export const HANDOFF_READY = "voa-sim-ready";
+export const HANDOFF_LOGIN = "voa-admin-login";
+export const HANDOFF_WAIT_MS = 1500;
+
+/** The admin login token from a same-origin message sent by the window that opened us. */
+export function acceptHandoff(event, origin, opener) {
+  if (opener === null || event.source !== opener || event.origin !== origin) return null;
+  if (event.data?.type !== HANDOFF_LOGIN || typeof event.data.token !== "string") return null;
+  return event.data.token;
 }
 
 // --- session controller ---
@@ -205,18 +220,28 @@ export class SimController {
   }
 
   async login(username, password, deviceLabel) {
+    const json = { username, password };
+    if (deviceLabel) json.device_label = deviceLabel;
+    return this.createSession(json, {});
+  }
+
+  /** Admin opened us from the admin page: its login token creates the session. */
+  async loginAsAdmin(loginToken) {
+    return this.createSession({ device_label: "관리자 시뮬" }, { Authorization: `Bearer ${loginToken}` }, true);
+  }
+
+  async createSession(fields, headers, fromAdmin = false) {
     this.set({ busy: true, error: null, notice: null, capacity: false });
     const json = {
-      username,
-      password,
+      ...fields,
       capabilities: { inputs: ["camera_0"], outputs: OUTPUTS, hud: HUD_MODELS[this.state.hudModel].hud },
     };
-    if (deviceLabel) json.device_label = deviceLabel;
-    const result = await this.api("POST", "/v1/sessions", { json });
+    const result = await this.api("POST", "/v1/sessions", { json, headers });
     if (!result.ok) {
-      const code = result.data?.code ?? "network";
+      let code = result.data?.code ?? "network";
       if (code === "capacity_exceeded") this.enterCapacity();
-      return this.set({ busy: false, error: message(code) });
+      if (fromAdmin && code === "unauthorized") code = "admin_login_expired";
+      return this.set({ busy: false, error: message(code), notice: null });
     }
     const s = result.data;
     this.tokens = { token: s.token, refresh_token: s.refresh_token };

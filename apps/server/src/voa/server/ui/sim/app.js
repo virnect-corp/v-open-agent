@@ -1,7 +1,7 @@
 // Sim page rendering (TASK-46). Logic is in core.js. Each screen is built once and then
 // updated in place, so the video keeps playing and typed input is not lost.
 // Text from the server is set with textContent only. Frames stay in memory.
-import { HUD_MODELS, SimController } from "./core.js";
+import { HANDOFF_READY, HANDOFF_WAIT_MS, HUD_MODELS, SimController, acceptHandoff, message } from "./core.js";
 
 const MAX_SIDE = 640;
 const JPEG_QUALITY = 0.8;
@@ -129,7 +129,7 @@ function buildLogin() {
     "main",
     { class: "card narrow" },
     h("h1", {}, "VOA 시뮬레이터"),
-    h("p", { class: "muted" }, "글래스 앱과 같은 API를 씁니다. 새로고침하면 로그아웃됩니다."),
+    h("p", { class: "muted" }, "글래스 앱과 같은 API를 씁니다. 착용자 또는 관리자 계정으로 로그인합니다. 새로고침하면 로그아웃됩니다."),
     ...messages.nodes,
     h("div", { class: "split" }, h("section", {}, h("h2", {}, "로그인"), login), h("section", {}, h("h2", {}, "가입"), signup)),
   );
@@ -364,6 +364,26 @@ function buildGlass() {
   return { screen: "glass", node, update, grab };
 }
 
+// Opened from the admin page: ask it for the admin login instead of showing the form.
+function adminHandoff() {
+  const opener = window.opener;
+  if (!opener) return;
+  controller.set({ notice: "관리자 페이지의 로그인으로 시작하는 중입니다." });
+  const done = (event) => {
+    const token = acceptHandoff(event, window.origin, opener);
+    if (token === null) return;
+    window.removeEventListener("message", done);
+    window.clearTimeout(fallback);
+    controller.loginAsAdmin(token);
+  };
+  const fallback = window.setTimeout(() => {
+    window.removeEventListener("message", done);
+    controller.set({ notice: null, error: message("admin_handoff_missing") });
+  }, HANDOFF_WAIT_MS);
+  window.addEventListener("message", done);
+  opener.postMessage({ type: HANDOFF_READY }, window.origin);
+}
+
 // One page-wide tick: watchdog, HUD expiry and, on the glass view, frame capture.
 let grabbing = false;
 window.setInterval(async () => {
@@ -382,3 +402,4 @@ window.setInterval(async () => {
 }, 50);
 
 render(controller.state);
+adminHandoff(); // once, after the first screen (TASK-46A)

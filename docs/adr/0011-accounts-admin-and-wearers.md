@@ -46,6 +46,7 @@
   - `POST /v1/sessions {username, password, device_label?, capabilities, mission_id?}`
   - `device_label`은 표시용이다(예: "현장 A 글래스 1"). 인증에는 쓰지 않는다.
   - 응답은 지금과 같다(§7.1). 세션에 `user_id`가 붙는다.
+- 관리자 계정도 시뮬 페이지에서 세션을 만들 수 있다(소유자 요구 2026-11-26, TASK-46A). 기본 비밀번호를 바꾸기 전에는 403 `password_change_required`다. 관리자 페이지의 "시뮬레이터" 메뉴로 열면 다시 로그인하지 않는다: 관리자 페이지가 연 창이 같은 출처에서 준비 메시지를 보내면, 관리자 페이지가 로그인 token을 `postMessage`로 그 창에만 넘기고(URL과 저장소에는 두지 않음), 시뮬 페이지는 `POST /v1/sessions`에 `Authorization: Bearer <관리자 로그인 token>`과 `capabilities`만 보내 세션을 만든다. 시뮬 페이지를 직접 열면 로그인 화면이 나온다. 세션은 `sessions.user_id`에 관리자 ID로 남고 동시 세션 상한에 포함된다.
 - 그 뒤 흐름은 ADR-0010과 같다.
   1. `GET /v1/missions`
   2. 미션 선택
