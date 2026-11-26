@@ -39,10 +39,28 @@ def token_digest(token: str) -> bytes:
 # --- REST bodies (SPEC 7.1) ---
 
 
+FlashMode = Literal["none", "border", "full_screen"]
+
+
+def _no_flash() -> list[FlashMode]:
+    return ["none"]
+
+
+class HudCapabilities(BaseModel):
+    """What the HUD can draw (SPEC 7.4). The server sends the same `presentation` to
+    every device; the device reduces it. Declared for the record and the sim page."""
+
+    model_config = MODEL_CONFIG
+    color: bool = False
+    flash_modes: list[FlashMode] = Field(default_factory=_no_flash, max_length=3)
+    max_lines: int = Field(default=2, ge=1, le=6)
+
+
 class Capabilities(BaseModel):
     model_config = MODEL_CONFIG
     inputs: list[InputCap]
     outputs: list[OutputCap]
+    hud: HudCapabilities | None = None
 
 
 class CreateSessionRequest(BaseModel):

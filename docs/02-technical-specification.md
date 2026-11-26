@@ -685,6 +685,8 @@ OutputCap = Literal["hud", "speaker", "haptic"]
 - 스타일 선택: 관리자 설정 `hud_style_map`에서 `scenario_id` 항목, 없으면 `severity` 항목(notice는 `degraded`), 없으면 기본 스타일 순으로 고른다.
 - `played` ACK는 HUD 표시가 시작된 시점이다. 깜빡임이 끝나기를 기다리지 않는다.
 - 시뮬 페이지는 영상 위에 글래스 표시 영역 비율의 HUD 레이어를 이 규칙으로 그린다.
+- **시뮬 페이지 `/ui/sim` (TASK-46)**: 관리자 페이지와 같은 방식(목록의 정적 파일 4개, 같은 보안 헤더에 `media-src blob:`, `Permissions-Policy: camera=(self)`)으로 제공한다. 흐름: 착용자 로그인(또는 가입 신청과 승인 대기 안내) → `POST /v1/sessions`(`capabilities.hud`는 고른 기종 값) → 제어 WebSocket(`Sec-WebSocket-Protocol: voa.v1, voa.bearer.<token>`, 브라우저는 헤더를 못 넣음) → `auth_ok` 후 `alert_sync` → **미션 목록에서 고름**(`PUT .../mission`) → 그 뒤에만 캡처 시작. 웹캠 또는 로컬 동영상(`blob:`으로 재생, 파일은 업로드하지 않음)에서 긴 변 640px JPEG를 만들어 진행 중 1개, `frame_interval_ms` 이상 간격으로 올린다. `config`, `mission` 메시지가 오면 간격을 바꾼다. alert는 `received` ACK, HUD 표시 시작과 동시에 `played` ACK(이미 표시한 `alert_id`는 ACK만 다시)를 보낸다. 판정 프레임 창은 결과가 온 그 프레임(메모리의 비트맵) 위에 박스와 프레임 나이를 그리고, 결과를 쓴 프레임과 그보다 오래된 프레임은 버린다. 상태 표시줄은 위 표의 규칙을 그대로 쓰고, "응답 지연"의 동기 한도는 기본값 1000 ms로 본다(세션 응답에 없음). token은 페이지 메모리에만 둔다. 로직(`core.js`)은 `scripts/ui-test.sh`로 규칙표와 가짜 fetch/WebSocket/시계에 대해 시험한다.
+- 세션 생성의 `capabilities.hud`는 `{color: bool, flash_modes: ["none"|"border"|"full_screen"], max_lines: 1~6}`이고 서버는 기록만 한다(TASK-46). 축소는 장치가 한다.
 - **글래스 HUD에는 탐지 박스나 위치를 가리키는 표시를 그리지 않는다 (ADR-0010).** 업로드부터 응답까지 지연이 있고 머리가 움직이므로, 서버가 준 박스는 현재 시야와 어긋난다. 경고는 위치와 무관한 문구로 한다. 시뮬 페이지는 박스를 **판정한 그 프레임** 위에 그린 "판정 프레임" 창에 프레임 나이(촬영 후 경과 시간)와 함께 보여 준다. 그 프레임은 브라우저 메모리에만 두고 표시한 뒤 버린다.
 
 **HUD 상태 표시줄 (ADR-0009 결정 5)**: 경고 팝업과 별개로, HUD 한쪽(기본 `top_right`)에 작은 표시 하나를 항상 둔다. 사용자가 연결, 서버 응답, 감지 상태를 한눈에 알 수 있게 한다. 장치가 자기가 가진 정보만으로 정하고, 글래스와 시뮬 페이지는 같은 규칙을 쓴다. 여러 조건이 겹치면 **위쪽 행이 우선**한다.
