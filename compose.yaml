@@ -92,6 +92,9 @@ services:
   server:
     profiles: ["server"]
     image: v-open-agent:server
+    # voa-data 볼륨의 소유자가 이미지 빌드 UID에 따라 달라지지 않게 실행 사용자를 고정한다
+    # (TASK-46: server 와 server-vision 이 같은 볼륨을 쓴다). 서버는 /data 에만 쓴다.
+    user: "1000:1000"
     build:
       <<: *server-build
       target: server
@@ -122,6 +125,9 @@ services:
   server-vision:
     profiles: ["server-vision"]
     image: v-open-agent:server-vision
+    # voa-data 볼륨의 소유자가 이미지 빌드 UID에 따라 달라지지 않게 실행 사용자를 고정한다
+    # (TASK-46: server 와 server-vision 이 같은 볼륨을 쓴다). 서버는 /data 에만 쓴다.
+    user: "1000:1000"
     build:
       <<: *server-build
       target: server-vision
@@ -143,6 +149,7 @@ services:
       VOA_DEVICES_FILE: ${VOA_DEVICES_FILE:-config/devices.yaml}
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
+      HOME: /tmp                  # 고정 실행 사용자는 이미지의 홈 폴더 소유자가 아닐 수 있다
     volumes:
       - .:/workspace
       - ${VOA_MODEL_WEIGHTS_HOST:-./apps/server/var/models}:/models:ro
