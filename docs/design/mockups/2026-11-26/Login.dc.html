@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>VOA 로그인과 가입</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&amp;family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0F1216}
+a{color:#8AB4F8}a:hover{color:#B3CEFB}
+button{font-family:inherit}
+</style>
+</helmet>
+<div style="min-height: 900px; background: #0F1216; color: #E6E9EE; font-family: 'Noto Sans KR', Inter, system-ui, sans-serif; display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: center; gap: 32px; padding: 56px 24px; box-sizing: border-box">
+
+<section style="flex: 1 1 420px; max-width: 480px; background: #171B21; border: 1px solid #2A3038; border-radius: 14px; padding: 28px; display: flex; flex-direction: column; gap: 16px">
+<div style="display: flex; align-items: center; gap: 10px">
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#E6E9EE" stroke-width="1.8" aria-hidden="true"><rect x="2" y="7" width="8" height="8" rx="3"></rect><rect x="14" y="7" width="8" height="8" rx="3"></rect><path d="M10 11h4"></path></svg>
+<h1 style="margin: 0; font-size: 20px">착용자</h1>
+</div>
+<div role="tablist" style="display: flex; gap: 6px; background: #0F1216; border-radius: 10px; padding: 4px">
+<button type="button" onClick="{{ showLogin }}" style="flex: 1; height: 40px; border-radius: 8px; border: 0; cursor: pointer; font-size: 14px; background: {{ loginTabBg }}; color: #E6E9EE">로그인</button>
+<button type="button" onClick="{{ showSignup }}" style="flex: 1; height: 40px; border-radius: 8px; border: 0; cursor: pointer; font-size: 14px; background: {{ signupTabBg }}; color: #E6E9EE">가입</button>
+</div>
+
+<sc-if value="{{ isLogin }}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; flex-direction: column; gap: 12px">
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #C3CAD3">아이디<input type="text" value="kim_worker" style="height: 44px; background: #0F1216; color: #E6E9EE; border: 1px solid #3A424D; border-radius: 8px; padding: 0 12px; font-size: 15px"></label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #C3CAD3">비밀번호<input type="password" value="password1" style="height: 44px; background: #0F1216; color: #E6E9EE; border: 1px solid #3A424D; border-radius: 8px; padding: 0 12px; font-size: 15px"></label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #C3CAD3">장치 이름 (선택, 표시용)<input type="text" value="현장 A 글래스 1" style="height: 44px; background: #0F1216; color: #E6E9EE; border: 1px solid #3A424D; border-radius: 8px; padding: 0 12px; font-size: 15px"></label>
+<a href="Missions.dc.html" style="display: flex; align-items: center; justify-content: center; height: 46px; border-radius: 8px; background: #2F6FED; color: #FFFFFF; text-decoration: none; font-size: 15px; font-weight: 600">로그인</a>
+<div style="display: flex; flex-direction: column; gap: 8px; font-size: 13px; line-height: 1.5">
+<div style="background: #2A2412; border: 1px solid #5A4A1C; color: #F4D48A; border-radius: 8px; padding: 10px 12px">승인 대기 중입니다. 관리자가 승인하면 로그인할 수 있습니다. (403 account_pending)</div>
+<div style="background: #2A1716; border: 1px solid #5C2A27; color: #FFB4AE; border-radius: 8px; padding: 10px 12px">로그인 시도가 많아 5분 동안 막혔습니다. (429)</div>
+<div style="background: #1E2228; border: 1px solid #3A424D; color: #C3CAD3; border-radius: 8px; padding: 10px 12px">동시 접속 정원(3)을 넘었습니다. 30초 뒤 다시 시도하세요. (503 capacity_exceeded)</div>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{ isSignup }}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-direction: column; gap: 12px">
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #C3CAD3">아이디 (영문 소문자, 숫자, _ - 3~32자)<input type="text" value="kim_worker" style="height: 44px; background: #0F1216; color: #E6E9EE; border: 1px solid #3A424D; border-radius: 8px; padding: 0 12px; font-size: 15px"></label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #C3CAD3">표시 이름 (선택)<input type="text" value="김작업" style="height: 44px; background: #0F1216; color: #E6E9EE; border: 1px solid #3A424D; border-radius: 8px; padding: 0 12px; font-size: 15px"></label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #C3CAD3">비밀번호 (8자 이상)<input type="password" value="password1" style="height: 44px; background: #0F1216; color: #E6E9EE; border: 1px solid #3A424D; border-radius: 8px; padding: 0 12px; font-size: 15px"></label>
+<button type="button" onClick="{{ submitSignup }}" style="height: 46px; border-radius: 8px; background: #2F6FED; color: #FFFFFF; border: 0; font-size: 15px; font-weight: 600; cursor: pointer">가입 신청</button>
+<sc-if value="{{ signedUp }}" hint-placeholder-val="{{ false }}">
+<div style="background: #14261B; border: 1px solid #285A3A; color: #A6E3BD; border-radius: 8px; padding: 10px 12px; font-size: 13px; line-height: 1.5">가입 신청이 접수되었습니다. 관리자 승인 후 로그인할 수 있습니다.</div>
+</sc-if>
+<p style="margin: 0; font-size: 12px; color: #9AA4B1; line-height: 1.5">이름 외의 개인정보는 받지 않습니다. 계정 정보는 위험 판단에 쓰지 않습니다.</p>
+</div>
+</sc-if>
+</section>
+
+<section style="flex: 1 1 360px; max-width: 420px; background: #171B21; border: 1px solid #2A3038; border-radius: 14px; padding: 28px; display: flex; flex-direction: column; gap: 14px">
+<h1 style="margin: 0; font-size: 20px">관리자</h1>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #C3CAD3">아이디<input type="text" value="admin" readonly style="height: 44px; background: #0F1216; color: #9AA4B1; border: 1px solid #3A424D; border-radius: 8px; padding: 0 12px; font-size: 15px"></label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #C3CAD3">비밀번호<input type="password" value="admin" style="height: 44px; background: #0F1216; color: #E6E9EE; border: 1px solid #3A424D; border-radius: 8px; padding: 0 12px; font-size: 15px"></label>
+<a href="Admin.dc.html" style="display: flex; align-items: center; justify-content: center; height: 46px; border-radius: 8px; background: #1F252D; color: #E6E9EE; border: 1px solid #3A424D; text-decoration: none; font-size: 15px">관리자 로그인</a>
+<div style="background: #2A2412; border: 1px solid #5A4A1C; border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 10px">
+<strong style="font-size: 14px; color: #F4D48A">첫 로그인: 비밀번호를 바꿔야 합니다</strong>
+<span style="font-size: 13px; color: #E2CFA0; line-height: 1.5">초기 비밀번호(admin)는 이 서버 컴퓨터(127.0.0.1)에서만 쓸 수 있습니다. 바꾸기 전에는 관리 기능이 잠깁니다.</span>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #E2CFA0">새 비밀번호 (8자 이상)<input type="password" value="" style="height: 44px; background: #0F1216; color: #E6E9EE; border: 1px solid #5A4A1C; border-radius: 8px; padding: 0 12px; font-size: 15px"></label>
+<button type="button" style="height: 44px; border-radius: 8px; background: #E3A72F; color: #1A1405; border: 0; font-size: 14px; font-weight: 600; cursor: pointer">비밀번호 변경</button>
+</div>
+</section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { tab: 'login', signedUp: false };
+  }
+  renderVals() {
+    const login = this.state.tab === 'login';
+    return {
+      isLogin: login,
+      isSignup: !login,
+      loginTabBg: login ? '#2B3440' : 'transparent',
+      signupTabBg: login ? 'transparent' : '#2B3440',
+      showLogin: () => this.setState({ tab: 'login' }),
+      showSignup: () => this.setState({ tab: 'signup', signedUp: false }),
+      signedUp: this.state.signedUp,
+      submitSignup: () => this.setState({ signedUp: true })
+    };
+  }
+}
+</script>
+</body>
+</html>

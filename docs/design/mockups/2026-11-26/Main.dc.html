@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>VOA 시뮬 페이지</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&amp;family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0F1216}
+a{color:#8AB4F8}a:hover{color:#B3CEFB}
+@keyframes voaFlash{0%{opacity:.55}50%{opacity:0}100%{opacity:0}}
+@keyframes voaBorder{0%{opacity:1}50%{opacity:0}100%{opacity:0}}
+.voa-flash{animation:voaFlash 400ms steps(1,end) 3 forwards}
+.voa-border{animation:voaBorder 400ms steps(1,end) 1 forwards}
+button{font-family:inherit}
+</style>
+</helmet>
+<div style="min-height: 900px; background: #0F1216; color: #E6E9EE; font-family: 'Noto Sans KR', Inter, system-ui, sans-serif; display: flex; flex-direction: column">
+
+<header style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 14px 24px; border-bottom: 1px solid #2A3038">
+<div style="display: flex; align-items: center; gap: 10px; margin-right: 12px">
+<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#E6E9EE" stroke-width="1.8" aria-hidden="true"><rect x="2" y="7" width="8" height="8" rx="3"></rect><rect x="14" y="7" width="8" height="8" rx="3"></rect><path d="M10 11h4"></path></svg>
+<h1 style="margin: 0; font-size: 17px; font-weight: 700">VOA 시뮬레이터</h1>
+<span style="font-size: 12px; color: #9AA4B1">글래스와 같은 API 사용</span>
+</div>
+<a href="Missions.dc.html" style="display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px; background: #14261B; color: #A6E3BD; border: 1px solid #285A3A; border-radius: 8px; font-size: 14px; text-decoration: none">미션: 화재 감시 v2<span style="color: #C3CAD3; font-size: 12px">변경</span></a>
+<button type="button" style="height: 40px; padding: 0 16px; background: #1F252D; color: #E6E9EE; border: 1px solid #3A424D; border-radius: 8px; font-size: 14px; cursor: pointer">웹캠 시작</button>
+<button type="button" style="height: 40px; padding: 0 16px; background: #1F252D; color: #E6E9EE; border: 1px solid #3A424D; border-radius: 8px; font-size: 14px; cursor: pointer">동영상 열기</button>
+<button type="button" style="height: 40px; padding: 0 16px; background: transparent; color: #9AA4B1; border: 1px solid #2A3038; border-radius: 8px; font-size: 14px; cursor: pointer">정지</button>
+<span style="font-size: 13px; color: #9AA4B1; padding: 0 8px">프레임 간격 333 ms (서버 설정)</span>
+<label style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: #C3CAD3; margin-left: auto">기종 HUD
+<select style="height: 36px; background: #1F252D; color: #E6E9EE; border: 1px solid #3A424D; border-radius: 8px; padding: 0 8px; font-family: inherit">
+<option>컬러, 전체 화면 깜빡임</option>
+<option>단색, 테두리 깜빡임</option>
+<option>단색, 깜빡임 없음</option>
+</select>
+</label>
+<label style="display: flex; align-items: center; gap: 6px; font-size: 13px; color: #C3CAD3"><input type="checkbox" checked="{{ showBoxes }}" onChange="{{ toggleBoxes }}" style="width: 18px; height: 18px">판정 프레임 창 (디버그)</label>
+</header>
+
+<main style="display: flex; flex-wrap: wrap; gap: 24px; padding: 24px; flex: 1">
+
+<section style="flex: 999 1 640px; min-width: 0; display: flex; flex-direction: column; gap: 14px">
+<div style="position: relative; width: 100%; aspect-ratio: 16 / 9; background: #05070A; border-radius: 12px; overflow: hidden; border: 1px solid #2A3038">
+
+<div style="position: absolute; inset: 0; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 18%">
+<div style="display: flex; flex-direction: column; align-items: center; gap: 10px; color: #5C6672; font-size: 13px">
+<svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="#5C6672" stroke-width="1.4" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M10 9.5v5l4-2.5z"></path></svg>
+<span>영상 영역 (웹캠 또는 동영상 파일. 브라우저 밖으로 업로드하지 않음)</span>
+</div>
+</div>
+
+<sc-if value="{{ showBoxes }}" hint-placeholder-val="{{ true }}">
+<div style="position: absolute; left: 12px; bottom: 12px; width: 26%; aspect-ratio: 16 / 9; background: #0A0D11; border: 1px solid #4A535E; border-radius: 8px; overflow: hidden; z-index: 2">
+<span style="position: absolute; left: 8px; top: 6px; font-size: 11px; color: #C3CAD3">판정 프레임 {{ pipFrame }}</span>
+<span style="position: absolute; right: 8px; top: 6px; font-size: 11px; color: #F4D48A; font-family: Inter, sans-serif">{{ pipAge }}</span>
+<sc-if value="{{ boxVisible }}" hint-placeholder-val="{{ true }}">
+<div style="position: absolute; left: 44%; top: 34%; width: 13%; height: 30%; border: 2px solid #F0524A; border-radius: 2px">
+<span style="position: absolute; left: -2px; top: -18px; background: #F0524A; color: #0F1216; font-size: 10px; font-weight: 600; padding: 1px 4px; font-family: Inter, sans-serif">fire 0.08</span>
+</div>
+</sc-if>
+<span style="position: absolute; left: 8px; bottom: 6px; font-size: 10px; color: #8A94A1">보낸 프레임 위에 그림 (글래스에는 표시 안 함)</span>
+</div>
+</sc-if>
+
+<div style="position: absolute; left: 8%; right: 8%; top: 8%; bottom: 8%; border: 1px dashed #3A424D; border-radius: 10px">
+<span style="position: absolute; left: 10px; bottom: 8px; font-size: 11px; color: #6E7884">글래스 표시 영역 (안전 여백 5%)</span>
+
+<div style="position: absolute; right: 12px; top: 12px; display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: rgba(10,12,15,.72); border: 1px solid {{ status.border }}">
+<span style="width: 10px; height: 10px; border-radius: 50%; background: {{ status.dot }}"></span>
+<span style="font-size: 14px; font-weight: 600; color: {{ status.text }}">{{ status.label }}</span>
+</div>
+
+<sc-if value="{{ showAlert }}" hint-placeholder-val="{{ true }}">
+<div style="position: absolute; left: 50%; top: 14px; transform: translateX(-50%); max-width: 70%; background: {{ alertBg }}; color: {{ alertFg }}; padding: 14px 22px; border-radius: 10px; font-size: 22px; font-weight: 700; line-height: 1.4; text-align: center">{{ alertText }}</div>
+</sc-if>
+</div>
+
+<sc-if value="{{ showFlash }}" hint-placeholder-val="{{ false }}">
+<div class="voa-flash" style="position: absolute; inset: 0; background: #F0524A; pointer-events: none"></div>
+</sc-if>
+<sc-if value="{{ showBorderFlash }}" hint-placeholder-val="{{ false }}">
+<div class="voa-border" style="position: absolute; inset: 0; border: 10px solid {{ borderFlashColor }}; border-radius: 12px; pointer-events: none"></div>
+</sc-if>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
+<span style="font-size: 13px; color: #9AA4B1; margin-right: 4px">시안용 상태 미리보기</span>
+<sc-for list="{{ states }}" as="s" hint-placeholder-count="7">
+<button type="button" onClick="{{ s.pick }}" style="height: 40px; padding: 0 14px; border-radius: 8px; font-size: 13px; cursor: pointer; background: {{ s.bg }}; color: {{ s.fg }}; border: 1px solid {{ s.line }}">{{ s.label }}</button>
+</sc-for>
+</div>
+</section>
+
+<aside style="flex: 1 1 320px; max-width: 420px; display: flex; flex-direction: column; gap: 14px">
+<div style="background: #171B21; border: 1px solid #2A3038; border-radius: 12px; padding: 16px">
+<h2 style="margin: 0 0 10px; font-size: 13px; font-weight: 600; color: #9AA4B1">연결</h2>
+<div style="display: flex; justify-content: space-between; font-size: 14px; padding: 5px 0"><span>제어 연결 (wss)</span><span style="color: {{ linkColor }}">{{ linkLabel }}</span></div>
+<div style="display: flex; justify-content: space-between; font-size: 14px; padding: 5px 0"><span>프레임 업로드</span><span style="color: {{ uploadColor }}">{{ uploadLabel }}</span></div>
+</div>
+
+<div style="background: #171B21; border: 1px solid #2A3038; border-radius: 12px; padding: 16px">
+<h2 style="margin: 0 0 10px; font-size: 13px; font-weight: 600; color: #9AA4B1">시나리오 상태</h2>
+<div style="display: flex; justify-content: space-between; align-items: center; font-size: 14px; padding: 5px 0">
+<span style="font-family: Inter, sans-serif">fire_in_view</span>
+<span style="font-weight: 700; color: {{ scenarioColor }}">{{ scenarioLabel }}</span>
+</div>
+</div>
+
+<div style="background: #171B21; border: 1px solid #2A3038; border-radius: 12px; padding: 16px">
+<h2 style="margin: 0 0 10px; font-size: 13px; font-weight: 600; color: #9AA4B1">마지막 응답 timing (개발용)</h2>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 12px; font-size: 14px">
+<span>왕복 (촬영 → 결과)</span><span style="text-align: right; font-family: Inter, sans-serif">{{ timing.rtt }}</span>
+<span>대기</span><span style="text-align: right; font-family: Inter, sans-serif">{{ timing.queue }}</span>
+<span>추론</span><span style="text-align: right; font-family: Inter, sans-serif">{{ timing.provider }}</span>
+<span>엔진</span><span style="text-align: right; font-family: Inter, sans-serif">{{ timing.engine }}</span>
+<span>보냄 / 건너뜀</span><span style="text-align: right; font-family: Inter, sans-serif">{{ timing.counts }}</span>
+</div>
+</div>
+
+<div style="background: #171B21; border: 1px solid #2A3038; border-radius: 12px; padding: 16px; flex: 1">
+<h2 style="margin: 0 0 10px; font-size: 13px; font-weight: 600; color: #9AA4B1">기록 (ID만)</h2>
+<div style="display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: #A9B2BD; font-family: Inter, 'Noto Sans KR', sans-serif">
+<sc-for list="{{ log }}" as="row" hint-placeholder-count="5">
+<div style="border-bottom: 1px solid #232932; padding-bottom: 6px">{{ row }}</div>
+</sc-for>
+</div>
+</div>
+</aside>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { mode: 'warning', showBoxes: true };
+  }
+  renderVals() {
+    const RED = '#F0524A', AMBER = '#E3A72F', GREEN = '#3DB46D', GRAY = '#8A94A1';
+    const modes = {
+      capacity: { label: '정원 초과', dot: GRAY, text: '#C3CAD3', border: GRAY },
+      disconnected: { label: '연결 끊김', dot: GRAY, text: '#C3CAD3', border: GRAY },
+      error: { label: '서버 오류', dot: RED, text: '#FFB4AE', border: RED },
+      slow: { label: '응답 지연', dot: AMBER, text: '#F4D48A', border: AMBER },
+      warning: { label: '경고', dot: RED, text: '#FFB4AE', border: RED },
+      unknown: { label: '판단 불가', dot: GRAY, text: '#C3CAD3', border: '#4A535E' },
+      candidate: { label: '확인 중', dot: AMBER, text: '#F4D48A', border: '#4A535E' },
+      clear: { label: '정상', dot: GREEN, text: '#A6E3BD', border: '#4A535E' }
+    };
+    const order = ['clear', 'candidate', 'warning', 'unknown', 'slow', 'error', 'disconnected', 'capacity'];
+    const mode = this.state.mode;
+    const hideDetection = mode === 'disconnected' || mode === 'error' || mode === 'capacity';
+    const scenario = {
+      clear: ['정상', GREEN], candidate: ['확인 중', AMBER], warning: ['경고', RED],
+      unknown: ['판단 불가', GRAY], slow: ['확인 중', AMBER]
+    };
+    const sc = hideDetection ? ['표시 안 함 (받지 못함)', GRAY] : scenario[mode];
+    const logs = {
+      warning: ['11:02:14  fire_in_view: candidate → warning', '11:02:14  alert alert_8Kq2 표시 → played 전송', '11:02:13  fire_in_view: clear → candidate', '11:02:09  frame f_000412 200 (312 ms)', '11:02:01  세션 시작 (wss 핸드셰이크 인증)'],
+      disconnected: ['11:05:40  제어 연결 끊김 (watchdog 3 s)', '11:05:40  내장 문구 음성 1회', '11:05:41  재접속 시도 1 s', '11:05:43  재접속 시도 2 s', '11:05:37  frame f_000498 200 (305 ms)'],
+      error: ['11:07:12  frame f_000530 503 no_model_deployed', '11:07:11  frame f_000529 503 no_model_deployed', '11:07:11  frame f_000528 503 no_model_deployed', '11:07:10  서버 오류 표시 (연속 3회)', '11:07:02  frame f_000527 200 (298 ms)'],
+      capacity: ['11:09:30  wss error capacity_exceeded (3/3)', '11:09:30  close 4503, 프레임 전송 안 함', '11:09:30  내장 문구 음성 1회', '11:10:00  재시도 예정 (30 s)', '11:09:29  로그인 kim_worker']
+    };
+    return {
+      showBoxes: this.state.showBoxes,
+      boxVisible: mode === 'warning' || mode === 'candidate',
+      toggleBoxes: () => this.setState({ showBoxes: !this.state.showBoxes }),
+      status: modes[mode],
+      pipFrame: 'f_000412',
+      pipAge: mode === 'slow' ? '1.7초 전' : '0.35초 전',
+      showAlert: mode === 'warning' || mode === 'unknown' || mode === 'disconnected' || mode === 'capacity',
+      alertText: mode === 'warning' ? '불꽃으로 보이는 것이 감지되었습니다. 주변을 확인하세요.' : (mode === 'unknown' ? '카메라 상태를 확인할 수 없어 감지가 제한됩니다.' : (mode === 'capacity' ? '동시 접속 정원을 넘었습니다. 잠시 후 다시 시도하세요.' : '서버 연결이 끊겨 경고를 받을 수 없습니다.')),
+      alertBg: mode === 'warning' ? 'rgba(240,82,74,.94)' : 'rgba(227,167,47,.94)',
+      alertFg: mode === 'warning' ? '#FFFFFF' : '#1A1405',
+      showFlash: mode === 'warning',
+      showBorderFlash: mode === 'unknown',
+      borderFlashColor: AMBER,
+      linkLabel: mode === 'disconnected' ? '끊김 (재접속 중)' : (mode === 'capacity' ? '정원 초과 (4503)' : '연결됨'),
+      linkColor: mode === 'disconnected' || mode === 'capacity' ? '#FFB4AE' : '#A6E3BD',
+      uploadLabel: mode === 'error' ? '실패 3회 연속' : (mode === 'slow' ? '응답 없음 1.7 s' : (mode === 'disconnected' || mode === 'capacity' ? '시작 안 함 (연결 후 전송)' : '정상')),
+      uploadColor: mode === 'error' ? '#FFB4AE' : (mode === 'slow' ? '#F4D48A' : (mode === 'disconnected' || mode === 'capacity' ? '#C3CAD3' : '#A6E3BD')),
+      scenarioLabel: sc[0],
+      scenarioColor: sc[1],
+      timing: mode === 'slow'
+        ? { rtt: '1,710 ms', queue: '1,180 ms', provider: '402 ms', engine: '61 µs', counts: '212 / 9' }
+        : { rtt: '348 ms', queue: '1 ms', provider: '312 ms', engine: '55 µs', counts: '418 / 3' },
+      log: logs[mode] || logs.warning,
+      states: order.map((key) => {
+        const on = key === mode;
+        return {
+          label: modes[key].label,
+          pick: () => this.setState({ mode: key }),
+          bg: on ? '#2B3440' : '#171B21',
+          fg: on ? '#FFFFFF' : '#C3CAD3',
+          line: on ? '#8AB4F8' : '#2A3038'
+        };
+      })
+    };
+  }
+}
+</script>
+</body>
+</html>
