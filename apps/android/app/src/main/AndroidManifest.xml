@@ -3,7 +3,15 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.VIBRATE" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+
+    <!-- TTS 엔진이 있는지 확인한다(없으면 speaker를 선언하지 않음, OQ-14) -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 
     <!-- 원본 미디어와 자격증명이 백업으로 유출되지 않도록 allowBackup을 비활성화한다 -->
