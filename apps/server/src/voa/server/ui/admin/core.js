@@ -51,6 +51,10 @@ export function createApi(fetchImpl) {
     hasToken() {
       return token !== null;
     },
+    /** Only for the sim-window handoff below; never rendered or stored. */
+    handoffToken() {
+      return token;
+    },
     async call(method, path, { json, bytes, contentType } = {}) {
       const headers = {};
       if (token !== null) headers.Authorization = `Bearer ${token}`;
@@ -77,6 +81,21 @@ export function createApi(fetchImpl) {
       return { ok: response.ok, status: response.status, data };
     },
   };
+}
+
+// --- sim window handoff (TASK-46A) ---
+// The admin page opens /ui/sim itself; the new window says "ready" and gets the login
+// token by postMessage, memory to memory. Only a same-origin message from the window
+// this page opened is answered, and only to that origin.
+
+export const HANDOFF_READY = "voa-sim-ready";
+export const HANDOFF_LOGIN = "voa-admin-login";
+
+export function answerHandoff(event, origin, simWindow, api) {
+  if (simWindow === null || event.source !== simWindow || event.origin !== origin) return false;
+  if (event.data?.type !== HANDOFF_READY || !api.hasToken()) return false;
+  simWindow.postMessage({ type: HANDOFF_LOGIN, token: api.handoffToken() }, origin);
+  return true;
 }
 
 // --- mission editor (pure helpers on a plain object) ---
@@ -284,6 +303,12 @@ export class AdminController {
     this.pendingPassword = null;
     this.set({ screen: "main", busy: false, notice: "비밀번호를 바꿨습니다." });
     return this.show("missions");
+  }
+
+  /** Is the login still valid on the server? (it forgets logins when it restarts) */
+  async verifyLogin() {
+    if (!this.api.hasToken()) return false;
+    return (await this.request("GET", "/v1/admin/capacity")) !== null; // 401 logs out here
   }
 
   logout(error = null) {

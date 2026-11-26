@@ -528,7 +528,7 @@ def create_app(
                 headers={"Retry-After": str(CAPACITY_RETRY_AFTER_S)},
             )
         user_id: str | None = None
-        if body.username is not None:  # wearer account (ADR-0011)
+        if body.username is not None:  # wearer, or admin on the sim page (ADR-0011, TASK-46A)
             if body.device_id is not None or runtime.accounts is None:
                 return _error(400, "invalid_request")
             result, user = runtime.accounts.authenticate(
@@ -538,14 +538,27 @@ def create_app(
                 return _error(429, "too_many_attempts")
             if result == "pending":
                 return _error(403, "account_pending")
-            if result != "ok" or user is None or user["role"] != "wearer":
+            if result != "ok" or user is None or user["role"] not in ("wearer", "admin"):
                 return _error(401, "unauthorized")
             if user["password_change_required"]:
                 return _error(403, "password_change_required")
             user_id = str(user["user_id"])
             allowed: tuple[frozenset[str], frozenset[str]] | None = (ALL_INPUTS, ALL_OUTPUTS)
         elif body.device_id is None:
-            return _error(400, "invalid_request")
+            # The admin page hands its login token to the sim window it opened (TASK-46A):
+            # `Authorization: Bearer <admin login token>` and no credentials in the body.
+            if _bearer(request) is None:
+                return _error(400, "invalid_request")
+            login = _login(runtime, request)
+            if login is None or login.role != "admin" or runtime.store is None:
+                return _error(401, "unauthorized")
+            admin = runtime.store.get_user(login.user_id)
+            if admin is None or admin["status"] != "active":
+                return _error(401, "unauthorized")
+            if admin["password_change_required"]:
+                return _error(403, "password_change_required")
+            user_id = login.user_id
+            allowed = (ALL_INPUTS, ALL_OUTPUTS)
         else:
             allowed = authenticate_device(
                 body, runtime.devices, allow_insecure_dev=runtime.settings.allow_insecure_dev
