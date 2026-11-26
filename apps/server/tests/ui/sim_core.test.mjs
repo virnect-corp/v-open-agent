@@ -391,3 +391,23 @@ test("the page asks the admin page for its login exactly once, at start", () => 
   assert.match(calls[0], /^adminHandoff\(\);/, "at module top level, not inside a callback");
   assert.ok(source.trimEnd().split("\n").at(-1).startsWith("adminHandoff();"), "after the first render");
 });
+
+
+test("judged-frame boxes mark the labels the mission judges on (fire) apart from others (smoke)", async () => {
+  const h = harness({
+    "GET /v1/missions": [200, { missions: [{ ...FIRE, scenarios: [{ id: "fire_in_view", labels: ["fire"], severity: "attention" }], models: ["m"] }] }],
+    "POST /v1/sessions/sess_1/frames": [200, {
+      frame_id: "f_000001", seq: 1, status: "processed", states: { fire_in_view: "candidate" },
+      timing: { queue_ms: 0, provider_ms: 400, engine_us: 50 },
+      results: [{ model_id: "m", observation_id: "o", detections: [
+        { label: "smoke", score: 0.05, bbox: [0, 0, 1, 1] },
+        { label: "fire", score: 0.08, bbox: [0.4, 0.3, 0.5, 0.6] },
+      ] }],
+    }],
+  });
+  await ready(h);
+  h.controller.startCapture();
+  await h.controller.upload(FRAME(h.clock));
+  const marks = h.controller.state.judged.detections.map((d) => [d.label, d.judged]);
+  assert.deepEqual(marks, [["smoke", false], ["fire", true]]);
+});

@@ -497,10 +497,21 @@ export class SimController {
     return result.status;
   }
 
+  /** Labels the chosen mission judges on (from `GET /v1/missions`). */
+  missionLabels() {
+    const id = this.state.mission?.mission_id;
+    const mission = this.state.missions.find((m) => m.mission_id === id);
+    return new Set((mission?.scenarios ?? []).flatMap((s) => s.labels));
+  }
+
   onResult(result, now) {
     this.state.lastResponseMs = now;
     const frame = this.frames.get(result.frame_id);
-    const detections = (result.results ?? []).flatMap((r) => r.detections);
+    const labels = this.missionLabels();
+    // Every detection is drawn; the ones the mission judges on are marked (TASK-46B).
+    const detections = (result.results ?? [])
+      .flatMap((r) => r.detections)
+      .map((d) => ({ ...d, judged: labels.has(d.label) }));
     this.frames.delete(result.frame_id);
     for (const id of [...this.frames.keys()]) if (id < result.frame_id) this.frames.delete(id); // older ones are stale
     this.set({

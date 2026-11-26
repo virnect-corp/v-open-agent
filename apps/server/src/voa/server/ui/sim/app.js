@@ -262,7 +262,7 @@ function buildGlass() {
       "div",
       { class: "stage" },
       h("div", { class: "view" }, video, glass),
-      h("aside", { class: "side" }, h("h2", {}, "판정 프레임 (디버그)"), pip, pipAge, h("p", { class: "muted" }, "보낸 프레임 위에 그립니다. 글래스에는 표시하지 않습니다.")),
+      h("aside", { class: "side" }, h("h2", {}, "판정 프레임 (디버그)"), pip, pipAge, h("p", { class: "muted" }, "보낸 프레임 위에 그립니다. 글래스에는 표시하지 않습니다. 빨간 실선은 미션이 판정에 쓰는 라벨, 흐린 점선은 그 밖의 라벨입니다.")),
     ),
     h(
       "div",
@@ -337,14 +337,25 @@ function buildGlass() {
     pip.width = image.width;
     pip.height = image.height;
     ctx.drawImage(image, 0, 0);
-    ctx.lineWidth = 2;
     ctx.font = "14px system-ui";
-    for (const d of judged.detections) {
+    // Labels the mission does not judge on first, faint and dashed; judged ones on top.
+    const ordered = [...judged.detections].sort((a, b) => Number(a.judged) - Number(b.judged));
+    for (const d of ordered) {
       const [x1, y1, x2, y2] = d.bbox;
-      ctx.strokeStyle = "#ff3b30";
+      ctx.save();
+      if (d.judged) {
+        ctx.lineWidth = 3;
+        ctx.setLineDash([]);
+        ctx.strokeStyle = ctx.fillStyle = "#ff3b30";
+      } else {
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.globalAlpha = 0.5;
+        ctx.strokeStyle = ctx.fillStyle = "#c8ccd2";
+      }
       ctx.strokeRect(x1 * pip.width, y1 * pip.height, (x2 - x1) * pip.width, (y2 - y1) * pip.height);
-      ctx.fillStyle = "#ff3b30";
       ctx.fillText(`${d.label} ${Number(d.score).toFixed(2)}`, x1 * pip.width + 3, Math.max(14, y1 * pip.height - 4));
+      ctx.restore();
     }
   }
 
