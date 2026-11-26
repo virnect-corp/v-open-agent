@@ -87,6 +87,7 @@ class SessionCreated(TokenPair):
     session_id: Id
     heartbeat_ms: int
     watchdog_ms: int
+    frame_interval_ms: int  # SPEC 7.6: the device uploads no faster than this
     mission: MissionRef | None = None
 
 
