@@ -25,6 +25,7 @@ ErrorCode = Literal[
     "protocol_error",
     "stream_not_declared",
     "mission_not_selected",
+    "capacity_exceeded",
 ]
 # Reserved for Stage C/D (SPEC 7.2); the MVP answers unsupported_message_type.
 RESERVED_TYPES = frozenset({"frame", "audio_chunk", "imu", "ptt_start", "ptt_end"})
@@ -175,6 +176,18 @@ class ErrorMessage(BaseModel):
     type: Literal["error"] = "error"
     code: ErrorCode
     message: str
+    # capacity_exceeded only (ADR-0010): how full the server is and when to retry
+    active: int | None = None
+    max: int | None = None
+    retry_after_s: int | None = None
+
+
+class ConfigMessage(BaseModel):
+    """Transport setting for this session; not a judgement rule (ADR-0009, ADR-0010)."""
+
+    model_config = MODEL_CONFIG
+    type: Literal["config"] = "config"
+    frame_interval_ms: int = Field(ge=100, le=5000)
 
 
 ServerMessage = Annotated[
@@ -186,6 +199,7 @@ ServerMessage = Annotated[
     | HeartbeatMessage
     | MissionMessage
     | FrameResultMessage
+    | ConfigMessage
     | ErrorMessage,
     Field(discriminator="type"),
 ]
@@ -201,6 +215,7 @@ ERROR_TEXT: dict[ErrorCode, str] = {
     "protocol_error": "message is not allowed at this point",
     "stream_not_declared": "stream was not declared for this session",
     "mission_not_selected": "select a mission for this session first",
+    "capacity_exceeded": "the server is at its session limit; retry later",
 }
 
 

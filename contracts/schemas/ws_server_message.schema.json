@@ -168,6 +168,29 @@
       "title": "AuthOkMessage",
       "type": "object"
     },
+    "ConfigMessage": {
+      "additionalProperties": false,
+      "description": "Transport setting for this session; not a judgement rule (ADR-0009, ADR-0010).",
+      "properties": {
+        "frame_interval_ms": {
+          "maximum": 5000,
+          "minimum": 100,
+          "title": "Frame Interval Ms",
+          "type": "integer"
+        },
+        "type": {
+          "const": "config",
+          "default": "config",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "frame_interval_ms"
+      ],
+      "title": "ConfigMessage",
+      "type": "object"
+    },
     "DecisionMessage": {
       "additionalProperties": false,
       "properties": {
@@ -246,20 +269,57 @@
       "additionalProperties": false,
       "description": "`message` is a fixed text per code; client input is never echoed back.",
       "properties": {
+        "active": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Active"
+        },
         "code": {
           "enum": [
             "unsupported_message_type",
             "rejected_schema",
             "protocol_error",
             "stream_not_declared",
-            "mission_not_selected"
+            "mission_not_selected",
+            "capacity_exceeded"
           ],
           "title": "Code",
           "type": "string"
         },
+        "max": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max"
+        },
         "message": {
           "title": "Message",
           "type": "string"
+        },
+        "retry_after_s": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retry After S"
         },
         "type": {
           "const": "error",
@@ -744,6 +804,7 @@
       "admission": "#/$defs/AdmissionMessage",
       "alert": "#/$defs/AlertMessage",
       "auth_ok": "#/$defs/AuthOkMessage",
+      "config": "#/$defs/ConfigMessage",
       "decision": "#/$defs/DecisionMessage",
       "error": "#/$defs/ErrorMessage",
       "frame_result": "#/$defs/FrameResultMessage",
@@ -777,6 +838,9 @@
     },
     {
       "$ref": "#/$defs/FrameResultMessage"
+    },
+    {
+      "$ref": "#/$defs/ConfigMessage"
     },
     {
       "$ref": "#/$defs/ErrorMessage"

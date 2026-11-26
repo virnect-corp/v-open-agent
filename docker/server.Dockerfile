@@ -85,3 +85,16 @@ ENV PYTHONPATH=/opt/voa/src
 USER voa
 WORKDIR /opt/voa
 CMD ["python", "-m", "voa.server"]
+
+# 실모델 서버 이미지 (ADR-0009, TASK-43): server + vision 그룹(CPU torch). 서버가 업로드된 프레임을
+# 직접 추론할 때 쓴다. 가중치는 포함하지 않고 /models 에 읽기 전용으로 마운트한다.
+# 가벼운 server 이미지는 그대로 두며 mock 미션은 그것으로 충분하다.
+FROM server AS server-vision
+ARG TORCH_INDEX=https://download.pytorch.org/whl/cpu
+USER root
+COPY apps/server/pyproject.toml /tmp/pyproject.toml
+RUN python -c "import tomllib; o = tomllib.load(open('/tmp/pyproject.toml', 'rb'))['project']['optional-dependencies']; v = o['vision']; open('/tmp/torch.txt', 'w').write('\n'.join(r for r in v if r.startswith('torch'))); open('/tmp/rest.txt', 'w').write('\n'.join(r for r in v if not r.startswith('torch')))" \
+ && pip install --index-url "${TORCH_INDEX}" -r /tmp/torch.txt \
+ && pip install -r /tmp/rest.txt \
+ && rm /tmp/torch.txt /tmp/rest.txt /tmp/pyproject.toml
+USER voa

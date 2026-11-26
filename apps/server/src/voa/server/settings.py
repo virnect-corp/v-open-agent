@@ -40,6 +40,8 @@ DEFAULTS: dict[str, str] = {
     "VOA_MODEL_AUTO_DOWNLOAD": "false",
     "VOA_SIGNUP_ENABLED": "true",
     "VOA_FRAME_MAX_BYTES": "500000",
+    "VOA_MAX_SESSIONS": "3",
+    "VOA_FRAME_INTERVAL_MAX_MS": "1000",
     "VOA_FRAME_INTERVAL_MS": "333",
     "VOA_FRAME_SYNC_TIMEOUT_MS": "1000",
     "VOA_SIGNUP_REQUIRES_APPROVAL": "true",
@@ -85,6 +87,8 @@ class Settings:
     frame_max_bytes: int = 500_000  # SPEC 7.6
     frame_interval_ms: int = 333
     frame_sync_timeout_ms: int = 1000
+    max_sessions: int = 3  # ADR-0010
+    frame_interval_max_ms: int = 1000
     signup_requires_approval: bool = True
 
     @classmethod
@@ -138,6 +142,8 @@ class Settings:
             frame_max_bytes=parse("VOA_FRAME_MAX_BYTES", int, 0),
             frame_interval_ms=parse("VOA_FRAME_INTERVAL_MS", int, 0),
             frame_sync_timeout_ms=parse("VOA_FRAME_SYNC_TIMEOUT_MS", int, 0),
+            max_sessions=parse("VOA_MAX_SESSIONS", int, 0),
+            frame_interval_max_ms=parse("VOA_FRAME_INTERVAL_MAX_MS", int, 0),
             signup_requires_approval=parse("VOA_SIGNUP_REQUIRES_APPROVAL", _bool, True),
         )
         bad += settings._violations()
@@ -174,6 +180,10 @@ class Settings:
             bad.append("VOA_FRAME_INTERVAL_MS")
         if self.frame_sync_timeout_ms <= 0:
             bad.append("VOA_FRAME_SYNC_TIMEOUT_MS")
+        if self.max_sessions < 1:
+            bad.append("VOA_MAX_SESSIONS")
+        if not self.frame_interval_ms <= self.frame_interval_max_ms <= 5000:
+            bad.append("VOA_FRAME_INTERVAL_MAX_MS")
         if self.metadata_retention_days < 1:
             bad.append("VOA_METADATA_RETENTION_DAYS")
         # Raw media storage has no opt-in path yet (AGENTS rule 5).

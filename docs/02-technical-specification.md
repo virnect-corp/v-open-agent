@@ -765,7 +765,9 @@ OutputCap = Literal["hud", "speaker", "haptic"]
 - 장치 세션 상한은 `VOA_MAX_SESSIONS`(기본 3)다(§7.1 세션 생성, §7.2 WebSocket 정원 초과).
 - 모델 인스턴스는 세션과 미션 사이에 공유한다. 여러 세션의 프레임은 모델별 작업 큐에서 세션 순서대로 번갈아(round-robin) 처리한다.
 - 세션의 평균 `queue_ms`가 그 세션의 `frame_interval_ms`를 넘는 상태가 5초 이상 이어지면, 간격을 1.5배로 늘려 `config`로 알린다(상한 `VOA_FRAME_INTERVAL_MAX_MS`). 평균 대기가 간격의 절반 아래로 10초 이상 내려가면 미션 권장값까지 되돌린다. 간격이 `staleness_ms`를 넘으면 엔진 규칙대로 `unknown`이 된다.
-- `GET /v1/admin/capacity`: 세션 수와 상한, 모델별 처리량(최근 1분), 세션별 실제 간격과 평균 대기
+- `GET /v1/admin/capacity`: `{sessions, max_sessions, inferences_last_minute: {model_id: n}, session_details: [{session_id, connected, frame_interval_ms, queue_ms_avg}]}`
+- 구현(TASK-43): 모델마다 `asyncio.Lock` 하나로 추론을 직렬화한다. 대기자는 도착 순으로 깨어나고 세션마다 stream당 처리 중 프레임이 1개라서 세션이 차례로 처리된다(round-robin). `queue_ms`는 모델이 비기까지 기다린 시간이다. `error`의 `active`, `max`, `retry_after_s`는 `capacity_exceeded`에만 붙는다.
+- 실측(2026-11-26, 맥 M1 Docker CPU `server-vision`, 미션 `fire_c1`, 산불 프레임 107장 x 3세션 동시): 세션마다 약 0.88 fps로 고르게 처리되었다(round-robin). `queue_ms` p50 약 746, 왕복 p50 약 1,120 ms라 동기 한도(1,000 ms)를 넘어 대부분 202와 `frame_result`였다. 간격은 333 → 499 → 748 → 1,000 ms로 늘었다. 프레임 간격이 `staleness_ms`(1,000)를 넘어 시나리오는 `unknown`이 되었고 경고는 0회였다(부하를 감추지 않음). 4번째 세션은 503 `capacity_exceeded`. **맥 CPU 한 대로는 화재 미션 3세션 실시간 판정이 어렵다**: GPU 서버, 세션 수 축소, 또는 미션의 `staleness_ms` 조정이 필요하다(OQ-04, OQ-06).
 
 ### 7.6 프레임 업로드 (ADR-0009)
 

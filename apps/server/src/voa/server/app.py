@@ -63,6 +63,7 @@ from voa.storage.sqlite import SQLiteStore
 
 NotReadyCode = Literal["profile_invalid", "db_unavailable", "devices_invalid"]
 RETENTION_PURGE_INTERVAL_S = 3600
+CAPACITY_RETRY_AFTER_S = 30  # ADR-0010
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
 
 
@@ -222,6 +223,18 @@ class ServerRuntime:
         self.input_tasks[session_id] = asyncio.create_task(input_loop(self, stream))
         self._warm_up(mission)
         return stream
+
+    def new_frame_state(self) -> FrameState:
+        base = self.settings.frame_interval_ms
+        return FrameState(base_interval_ms=base, interval_ms=base)
+
+    def capacity_body(self) -> dict[str, object]:
+        return {
+            "code": "capacity_exceeded",
+            "active": self.sessions.count(),
+            "max": self.settings.max_sessions,
+            "retry_after_s": CAPACITY_RETRY_AFTER_S,
+        }
 
     def _warm_up(self, mission: MissionVersion) -> None:
         """Load the mission's detectors in the background so the first frame is not slow."""
@@ -417,6 +430,12 @@ def create_app(
         runtime: ServerRuntime = request.app.state.runtime
         if runtime.not_ready_code() is not None:
             return _error(503, "not_ready")
+        if runtime.sessions.count() >= runtime.settings.max_sessions:  # ADR-0010
+            return JSONResponse(
+                runtime.capacity_body(),
+                status_code=503,
+                headers={"Retry-After": str(CAPACITY_RETRY_AFTER_S)},
+            )
         user_id: str | None = None
         if body.username is not None:  # wearer account (ADR-0011)
             if body.device_id is not None or runtime.accounts is None:
@@ -638,6 +657,38 @@ def create_app(
         if not changed:
             return _error(400, "invalid_request")
         return JSONResponse({"password_change_required": False})
+
+    @app.get("/v1/admin/capacity")
+    async def capacity(request: Request) -> JSONResponse:
+        runtime: ServerRuntime = request.app.state.runtime
+        denied = _admin_guard(runtime, request)
+        if denied is not None:
+            return denied
+        now = runtime.mono_ns()
+        sessions = []
+        for session_id in sorted(runtime.session_started):
+            state = runtime.frame_states.get(session_id)
+            samples = list(state.samples) if state is not None else []
+            sessions.append(
+                {
+                    "session_id": session_id,
+                    "connected": session_id in runtime.connections,
+                    "frame_interval_ms": (
+                        state.interval_ms if state else runtime.settings.frame_interval_ms
+                    ),
+                    "queue_ms_avg": (
+                        round(sum(q for _, q in samples) / len(samples), 1) if samples else None
+                    ),
+                }
+            )
+        return JSONResponse(
+            {
+                "sessions": runtime.sessions.count(),
+                "max_sessions": runtime.settings.max_sessions,
+                "inferences_last_minute": runtime.models.per_minute(now),
+                "session_details": sessions,
+            }
+        )
 
     @app.get("/v1/admin/users")
     async def list_users(request: Request) -> JSONResponse:

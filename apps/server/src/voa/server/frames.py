@@ -11,6 +11,7 @@ Frame bytes live only in this request: never stored, copied or logged.
 import asyncio
 import contextlib
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, get_args
 
@@ -19,6 +20,7 @@ from fastapi.responses import JSONResponse
 
 from voa.contracts.enums import QualityFlag
 from voa.contracts.messages import (
+    ConfigMessage,
     FrameCounters,
     FrameModelResult,
     FrameResult,
@@ -35,6 +37,10 @@ if TYPE_CHECKING:
     from voa.server.app import ServerRuntime
 
 JPEG_MAGIC = b"\xff\xd8"
+NS_PER_S = 1_000_000_000
+LOAD_WINDOW_NS = 5 * NS_PER_S  # average queue_ms over this window (ADR-0010)
+RAISE_AFTER_NS = 5 * NS_PER_S  # sustained overload before the interval grows x1.5
+RESTORE_AFTER_NS = 10 * NS_PER_S  # sustained calm before it returns to the base
 MAX_SIDE = 640
 QUALITY_FLAGS = frozenset(get_args(QualityFlag))
 
@@ -49,18 +55,53 @@ class Counters:
 
 @dataclass
 class FrameState:
-    """Per-session upload bookkeeping."""
+    """Per-session upload bookkeeping and the load-adaptive frame interval."""
 
+    base_interval_ms: int = 333
+    interval_ms: int = 333
     counters: Counters = field(default_factory=Counters)
+    samples: deque[tuple[int, float]] = field(default_factory=deque)
+    high_since: int | None = None
+    low_since: int | None = None
+    busy: set[str] = field(default_factory=set)
+    last: dict[str, tuple[int, int]] = field(default_factory=dict)  # stream -> (seq, capture)
+
+    def adapt(self, queue_ms: float, now_ns: int, max_interval_ms: int) -> int | None:
+        """New interval when the 5 s average queue says so, else None (ADR-0010).
+
+        Average above the interval for 5 s: x1.5 (capped). Below half of it for 10 s:
+        back to the base. A longer interval may outgrow `staleness_ms`, and the engine
+        then reports `unknown` as it should: load is never hidden.
+        """
+        self.samples.append((now_ns, queue_ms))
+        while self.samples and now_ns - self.samples[0][0] > LOAD_WINDOW_NS:
+            self.samples.popleft()
+        average = sum(q for _, q in self.samples) / len(self.samples)
+        if average > self.interval_ms:
+            self.low_since = None
+            if self.high_since is None:
+                self.high_since = now_ns
+            if now_ns - self.high_since >= RAISE_AFTER_NS and self.interval_ms < max_interval_ms:
+                self.interval_ms = min(int(self.interval_ms * 1.5), max_interval_ms)
+                self.high_since = now_ns
+                return self.interval_ms
+        elif average < self.interval_ms / 2 and self.interval_ms != self.base_interval_ms:
+            self.high_since = None
+            if self.low_since is None:
+                self.low_since = now_ns
+            if now_ns - self.low_since >= RESTORE_AFTER_NS:
+                self.interval_ms = self.base_interval_ms
+                self.low_since = None
+                return self.interval_ms
+        else:
+            self.high_since = self.low_since = None
+        return None
 
     def snapshot(self) -> FrameCounters:
         c = self.counters
         return FrameCounters(
             received=c.received, processed=c.processed, skipped=c.skipped, rejected=c.rejected
         )
-
-    busy: set[str] = field(default_factory=set)
-    last: dict[str, tuple[int, int]] = field(default_factory=dict)  # stream -> (seq, capture)
 
 
 @dataclass(frozen=True)
@@ -124,7 +165,7 @@ def register_frame_routes(app: FastAPI) -> None:
         )
         if owner is None or owner != session_id:
             return _error(401, "unauthorized")
-        state = runtime.frame_states.setdefault(session_id, FrameState())
+        state = runtime.frame_states.setdefault(session_id, runtime.new_frame_state())
         counters = state.counters
         counters.received += 1
         stream = runtime.streams.get(session_id)
@@ -166,6 +207,7 @@ def register_frame_routes(app: FastAPI) -> None:
         except ModelUnavailable:
             return _error(503, "no_model_deployed")
         counters.processed += 1
+        await _adapt(runtime, session_id, state, result)
         return JSONResponse(result.model_dump(mode="json"))
 
 
@@ -187,21 +229,25 @@ async def _process(
     body: bytes,
     received: int,
 ) -> FrameResult:
-    started = runtime.mono_ns()
+    started: int | None = None  # when the first model was free for this frame
     frame = Frame(headers.frame_id, headers.capture_ts, body)
     drafts = []
     provider_ns = 0
     for model_id, floor in _models(stream):
 
         def run(model_id: str = model_id, floor: float = floor) -> list[object]:
-            provider = runtime.models.provider(model_id, floor)
-            with runtime.models.lock(model_id):
-                return list(provider.process(frame))
+            return list(runtime.models.provider(model_id, floor).process(frame))
 
-        begin = time.perf_counter_ns()
-        produced = await asyncio.to_thread(run)
-        provider_ns += time.perf_counter_ns() - begin
+        async with runtime.models.lock(model_id):
+            if started is None:
+                started = runtime.mono_ns()
+            begin = time.perf_counter_ns()
+            produced = await asyncio.to_thread(run)
+            provider_ns += time.perf_counter_ns() - begin
+            runtime.models.record(model_id, runtime.mono_ns())
         drafts += [(model_id, d) for d in produced]
+    if started is None:
+        started = runtime.mono_ns()
 
     results: list[FrameModelResult] = []
     engine_begin = time.perf_counter_ns()
@@ -260,6 +306,19 @@ def _send_later(
         return
     message = FrameResultMessage(**task.result().model_dump())
     asyncio.ensure_future(_send_text(websocket, message.model_dump_json()))
+    if state is not None:
+        asyncio.ensure_future(_adapt(runtime, session_id, state, task.result()))
+
+
+async def _adapt(
+    runtime: "ServerRuntime", session_id: str, state: FrameState, result: FrameResult
+) -> None:
+    changed = state.adapt(
+        result.timing.queue_ms, runtime.mono_ns(), runtime.settings.frame_interval_max_ms
+    )
+    websocket = runtime.connections.get(session_id)
+    if changed is not None and websocket is not None:
+        await _send_text(websocket, ConfigMessage(frame_interval_ms=changed).model_dump_json())
 
 
 async def _send_text(websocket: object, text: str) -> None:
