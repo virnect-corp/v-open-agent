@@ -1,7 +1,14 @@
 package ai.voa.client
 
 import ai.voa.client.protocol.ConfigMessage
+import ai.voa.client.protocol.CreateSessionRequest
 import ai.voa.client.protocol.CreateSessionResponse
+import ai.voa.client.protocol.FlashMode
+import ai.voa.client.protocol.HudCapabilities
+import ai.voa.client.protocol.InputCap
+import ai.voa.client.protocol.LoginResponse
+import ai.voa.client.protocol.OutputCap
+import ai.voa.client.protocol.SessionCapabilities
 import ai.voa.client.protocol.FrameResult
 import ai.voa.client.protocol.FrameResultMessage
 import ai.voa.client.protocol.HeartbeatMessage
@@ -9,6 +16,7 @@ import ai.voa.client.protocol.MissionMessage
 import ai.voa.client.protocol.MissionRef
 import ai.voa.client.protocol.RiskState
 import ai.voa.client.protocol.ServerMessage
+import ai.voa.client.session.ApiResult
 import ai.voa.client.session.Cancellable
 import ai.voa.client.session.ControlChannel
 import ai.voa.client.session.ControlListener
@@ -24,8 +32,9 @@ import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
 /**
- * 앱 전체가 함께 쓰는 세션 (메모리에만). 로그인 화면, 미션 화면, 감지 화면이 바뀌어도
- * 제어 연결이 유지된다. 프로세스가 끝나면 사라진다(새로 로그인).
+ * 앱 전체가 함께 쓰는 로그인과 연결 (메모리에만, 프로세스가 끝나면 사라진다).
+ * - 로그인: 계정 확인과 로그인 token. 정원을 차지하지 않는다 (TASK-47)
+ * - 연결: 미션을 고를 때 만드는 세션과 제어 연결. 감지 화면을 나가면 해제한다
  */
 object VoaSession {
     val client: OkHttpClient = OkHttpClient.Builder()
@@ -38,6 +47,11 @@ object VoaSession {
     var api: SessionApi? = null
         private set
     var baseUrl: HttpUrl? = null
+        private set
+    private var loginToken: String? = null // memory only; never logged or shown
+    var role: String? = null
+        private set
+    var deviceLabel: String? = null
         private set
     var created: CreateSessionResponse? = null
         private set
@@ -57,10 +71,72 @@ object VoaSession {
         private set
     @Volatile var announcement: String? = null
 
+    /** A message for the mission screen after detection ended on its own (e.g. session ended). */
+    var notice: String? = null
+
     /** 지금 화면에 연결 이벤트를 넘긴다(한 번에 하나). */
     var screen: ControlListener? = null
 
-    val active: Boolean get() = channel != null
+    val loggedIn: Boolean get() = loginToken != null
+    val connected: Boolean get() = channel != null
+
+    /** The bearer for mission lists: the login token (TASK-47). */
+    fun missionsToken(): String? = tokens?.token ?: loginToken
+
+    fun signedIn(url: HttpUrl, sessionApi: SessionApi, login: LoginResponse, label: String) {
+        logout()
+        api = sessionApi
+        baseUrl = url
+        loginToken = login.token
+        role = login.role
+        deviceLabel = label
+    }
+
+    /** Connect with the chosen mission: a session from the login token, then the control socket. */
+    fun connect(missionId: String): ApiResult<CreateSessionResponse> {
+        val sessionApi = api ?: return ApiResult.Failed(401, "unauthorized")
+        val url = baseUrl ?: return ApiResult.Failed(401, "unauthorized")
+        val request = CreateSessionRequest(
+            missionId = missionId,
+            deviceLabel = deviceLabel,
+            capabilities = SessionCapabilities(
+                inputs = listOf(InputCap.CAMERA_0),
+                outputs = listOf(OutputCap.HUD, OutputCap.SPEAKER, OutputCap.HAPTIC),
+                hud = HudCapabilities(
+                    color = true,
+                    flashModes = listOf(FlashMode.NONE, FlashMode.BORDER, FlashMode.FULL_SCREEN),
+                    maxLines = 2,
+                ),
+            ),
+        )
+        val result = sessionApi.createSession(request, loginToken)
+        if (result is ApiResult.Ok) {
+            main.post {
+                start(url, sessionApi, result.value)
+                result.value.mission?.let { confirmMission(it) }
+            }
+        }
+        return result
+    }
+
+    /** Disconnect: stop the socket and end the session so the slot is free; the login stays. */
+    fun disconnect() {
+        val sessionApi = api
+        val session = created
+        val sessionToken = tokens?.token
+        stopConnection()
+        if (sessionApi != null && session != null && sessionToken != null) {
+            Thread { sessionApi.disconnect(session.sessionId, sessionToken) }.start()
+        }
+    }
+
+    fun logout() {
+        disconnect()
+        loginToken = null
+        role = null
+        api = null
+        baseUrl = null
+    }
 
     private val tick = object : Runnable {
         override fun run() {
@@ -69,10 +145,8 @@ object VoaSession {
         }
     }
 
-    fun start(url: HttpUrl, sessionApi: SessionApi, session: CreateSessionResponse) {
-        stop()
-        api = sessionApi
-        baseUrl = url
+    private fun start(url: HttpUrl, sessionApi: SessionApi, session: CreateSessionResponse) {
+        stopConnection()
         created = session
         mission = session.mission
         missionConfirmed = false
@@ -114,14 +188,13 @@ object VoaSession {
         states = result.states
     }
 
-    fun stop() {
+    private fun stopConnection() {
         main.removeCallbacks(tick)
         channel?.stop()
         channel = null
         uploader = null
         tokens = null
         created = null
-        api = null
         mission = null
         missionConfirmed = false
         states = emptyMap()
