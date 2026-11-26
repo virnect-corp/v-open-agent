@@ -19,8 +19,11 @@ from voa.train.finetune import (
     coco_annotations,
     hflip_boxes,
     iou,
+    keep_negatives,
     load_split,
     lr_factor,
+    prior_bias,
+    sweep,
 )
 from voa.train.finetune import main as finetune_main
 
@@ -67,6 +70,28 @@ def test_learning_rate_warms_up_then_decays_to_zero() -> None:
     assert not math.isnan(lr_factor(0, 0, 0))
 
 
+def test_prior_bias_starts_sigmoid_at_the_prior() -> None:
+    assert 1 / (1 + math.exp(-prior_bias(0.01))) == pytest.approx(0.01)
+    assert prior_bias(0.01) == pytest.approx(-4.59512, abs=1e-5)
+    for bad in (0.0, 1.0):
+        with pytest.raises(ValueError):
+            prior_bias(bad)
+
+
+def test_negative_images_can_be_thinned_deterministically() -> None:
+    fire = (("fire", (0.1, 0.1, 0.2, 0.2)),)
+    samples = [Sample(f"p{i}.jpg", fire) for i in range(5)]
+    samples += [Sample(f"n{i}.jpg", ()) for i in range(200)]
+    assert keep_negatives(samples, 1.0) == samples
+    none = keep_negatives(samples, 0.0)
+    assert none == samples[:5]
+    some = keep_negatives(samples, 0.25)
+    assert some[:5] == samples[:5] and 25 <= len(some) - 5 <= 75
+    assert keep_negatives(samples, 0.25) == some
+    with pytest.raises(TrainError):
+        keep_negatives(samples, 1.5)
+
+
 def test_iou_edges() -> None:
     assert iou((0, 0, 1, 1), (0, 0, 1, 1)) == 1.0
     assert iou((0, 0, 1, 1), (1, 1, 2, 2)) == 0.0
@@ -92,6 +117,20 @@ def test_metrics_match_boxes_and_count_fire_images() -> None:
     assert summary["fire_image_recall"] == 0.5
     assert summary["false_fire_image_rate"] == 0.5
     assert summary["images"] == 4
+
+
+def test_sweep_reports_the_threshold_with_the_best_fire_f1() -> None:
+    fire = (0.1, 0.1, 0.3, 0.3)
+    items = [
+        ([("fire", fire)], [("fire", 0.25, fire)]),  # good box with a low (VFL-like) score
+        ([("fire", fire)], [("fire", 0.15, fire)]),
+        ([], [("fire", 0.12, (0.6, 0.6, 0.7, 0.7))]),  # weak false box
+    ]
+    summary = sweep(["smoke", "fire"], items, thresholds=(0.1, 0.2, 0.5))
+    assert summary["fire_f1_by_threshold"] == {"0.1": 0.8, "0.2": 0.6667, "0.5": 0.0}
+    assert summary["best_threshold"] == 0.1
+    assert summary["fire"]["tp"] == 2 and summary["fire"]["fp"] == 1
+    assert summary["false_fire_image_rate"] == 1.0
 
 
 def test_metrics_without_images_are_tbd() -> None:
@@ -135,6 +174,7 @@ def test_two_step_cpu_smoke_run_writes_loadable_weights_and_a_record(tmp_path: P
     body = "".join(json.dumps(r) + "\n" for r in rows)
     (prep / "train.jsonl").write_text(body, encoding="utf-8")
     (prep / "val.jsonl").write_text(body, encoding="utf-8")
+    (prep / "test.jsonl").write_text(body, encoding="utf-8")
     (prep / "dataset.json").write_text(json.dumps({"class_names": ["smoke", "fire"]}))
 
     out = tmp_path / "out"
@@ -150,6 +190,11 @@ def test_two_step_cpu_smoke_run_writes_loadable_weights_and_a_record(tmp_path: P
     record = json.loads((out / "train_record.json").read_text(encoding="utf-8"))
     assert record["steps"] == 2 and record["class_names"] == ["smoke", "fire"]
     assert len(record["best_sha256"]) == 64
+    assert record["test_images"] == 4 and record["test"]["images"] == 4
+    assert "best_threshold" in record["test"]
+    first = record["epochs"][0]
+    assert first["val"]["fire_top_score_mean"] != "TBD"
+    assert first["train_loss"] < 200  # head starts at the prior: no 500+ first loss
     config = json.loads((out / "best" / "config.json").read_text(encoding="utf-8"))
     assert config["model_type"] == "rt_detr"
     assert config["id2label"] == {"0": "smoke", "1": "fire"}

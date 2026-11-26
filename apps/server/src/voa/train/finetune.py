@@ -17,7 +17,11 @@ downloaded (checked by the caller). Nothing is downloaded. Output:
 Validation reports per-class box precision/recall/F1 at IoU 0.5 and, for `fire`,
 image-level recall (a fire image with any fire box) and the false-image rate
 (an image without fire that gets a fire box), because the engine consumes
-per-frame detections. `best/` is chosen by fire box F1. These are measurements,
+per-frame detections. After training, `best/` is evaluated once on the untouched
+`test` split (`train_record.json` `test`). RT-DETR learns IoU-aware scores (VFL), so on fuzzy flame
+boxes good detections often score 0.1-0.3: metrics are computed at every score
+threshold in `SWEEP_THRESHOLDS` and the threshold with the best fire F1 is
+reported. `best/` is chosen by that F1. These are measurements,
 not claims; event recall and FP/hour come from the evaluation runner later.
 The pure helpers below need no torch; `train()` imports the `vision` stack lazily.
 """
@@ -64,11 +68,12 @@ class Options:
     amp: bool = True
     device: str = "auto"
     seed: int = 0
-    score_threshold: float = 0.5
+    score_floor: float = 0.05  # lowest score kept for the threshold sweep
     max_steps: int = 0  # >0: stop after this many optimizer steps (smoke runs)
     val_limit: int = 0  # >0: validate on the first N images only
     log_every: int = 50
     hflip: float = 0.5
+    negatives: float = 1.0  # fraction of box-free training images kept (by path hash)
     code_commit: str = "TBD"
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -118,6 +123,18 @@ def coco_annotations(
 
 def hflip_boxes(boxes: tuple[tuple[str, Box], ...]) -> tuple[tuple[str, Box], ...]:
     return tuple((label, (1.0 - x2, y1, 1.0 - x1, y2)) for label, (x1, y1, x2, y2) in boxes)
+
+
+def prior_bias(probability: float = 0.01) -> float:
+    """Class-logit bias so a fresh sigmoid head starts at `probability` (RT-DETR init).
+
+    `from_pretrained(..., ignore_mismatched_sizes=True)` re-creates the class heads
+    with bias 0 (score 0.5 for every query). The first focal/VFL loss is then huge
+    and training collapses to near-zero scores; TASK-38 run 1 ended there.
+    """
+    if not 0.0 < probability < 1.0:
+        raise ValueError("probability must be within (0, 1)")
+    return -math.log((1.0 - probability) / probability)
 
 
 def lr_factor(step: int, warmup: int, total: int) -> float:
@@ -219,6 +236,44 @@ class Metrics:
         return out
 
 
+SWEEP_THRESHOLDS = (0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.5)
+
+
+def sweep(
+    classes: list[str],
+    items: Sequence[tuple[Sequence[tuple[str, Box]], Sequence[tuple[str, float, Box]]]],
+    thresholds: Sequence[float] = SWEEP_THRESHOLDS,
+) -> dict[str, Any]:
+    """Metrics at each score threshold; the top level is the best fire-F1 threshold."""
+    by_threshold: dict[str, dict[str, Any]] = {}
+    for threshold in thresholds:
+        metrics = Metrics(classes)
+        for truth, predicted in items:
+            metrics.add(truth, [p for p in predicted if p[1] >= threshold])
+        by_threshold[f"{threshold:g}"] = metrics.summary()
+
+    def fire_f1(key: str) -> float:
+        return float(by_threshold[key].get("fire", {}).get("f1", 0.0))
+
+    best = max(by_threshold, key=lambda key: (fire_f1(key), float(key)))
+    summary = dict(by_threshold[best])
+    summary["best_threshold"] = float(best)
+    summary["fire_f1_by_threshold"] = {key: fire_f1(key) for key in by_threshold}
+    return summary
+
+
+def keep_negatives(samples: Sequence[Sample], fraction: float) -> list[Sample]:
+    """Keep every image with boxes and a deterministic `fraction` of box-free ones."""
+    if not 0.0 <= fraction <= 1.0:
+        raise TrainError("negatives must be within [0, 1]")
+    kept = []
+    for sample in samples:
+        digest = hashlib.sha256(sample.image.encode("utf-8")).digest()
+        if sample.boxes or int.from_bytes(digest[:8], "big") / 2**64 < fraction:
+            kept.append(sample)
+    return kept
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -253,6 +308,7 @@ def train(opts: Options) -> dict[str, Any]:  # pragma: no cover - exercised by m
     names = class_names(prep)
     label_ids = {name: index for index, name in enumerate(names)}
     train_set, val_set = load_split(prep, "train"), load_split(prep, "val")
+    train_set = keep_negatives(train_set, opts.negatives)  # validation keeps all images
     if opts.val_limit > 0:
         val_set = val_set[: opts.val_limit]
     if not train_set:
@@ -274,7 +330,11 @@ def train(opts: Options) -> dict[str, Any]:  # pragma: no cover - exercised by m
         id2label=dict(enumerate(names)),
         label2id=label_ids,
         ignore_mismatched_sizes=True,  # new class head
-    ).to(device)
+    )
+    with torch.no_grad():
+        for head in [*model.model.decoder.class_embed, model.model.enc_score_head]:
+            head.bias.fill_(prior_bias())
+    model.to(device)
 
     class Frames(Dataset):  # type: ignore[misc]  # torch is untyped here (vision group)
         def __init__(self, samples: list[Sample], augment: bool) -> None:
@@ -315,6 +375,7 @@ def train(opts: Options) -> dict[str, Any]:  # pragma: no cover - exercised by m
         "persistent_workers": False,
     }
     val_loader = DataLoader(Frames(val_set, augment=False), shuffle=False, **loader_args)
+    test_set = load_split(prep, "test")  # never used for training or model selection
 
     backbone = [p for n, p in model.named_parameters() if "backbone" in n and p.requires_grad]
     rest = [p for n, p in model.named_parameters() if "backbone" not in n and p.requires_grad]
@@ -335,11 +396,13 @@ def train(opts: Options) -> dict[str, Any]:  # pragma: no cover - exercised by m
     epochs: list[dict[str, Any]] = []
     best_f1, step, started = -1.0, 0, time.monotonic()
 
-    def evaluate() -> dict[str, Any]:
+    def evaluate(loader: Any = None) -> dict[str, Any]:
         model.eval()
-        metrics, losses = Metrics(names), []
+        items: list[tuple[Any, Any]] = []
+        losses: list[float] = []
+        fire_top: list[float] = []
         with torch.inference_mode():
-            for batch in val_loader:
+            for batch in loader or val_loader:
                 pixels = batch["pixel_values"].to(device)
                 labels = [{k: v.to(device) for k, v in t.items()} for t in batch["labels"]]
                 with torch.autocast("cuda", dtype=torch.float16, enabled=use_amp):
@@ -347,7 +410,7 @@ def train(opts: Options) -> dict[str, Any]:  # pragma: no cover - exercised by m
                 losses.append(float(outputs.loss))
                 results = processor.post_process_object_detection(
                     outputs,
-                    threshold=opts.score_threshold,
+                    threshold=opts.score_floor,
                     target_sizes=torch.tensor(batch["sizes"], device=device),
                 )
                 for result, (h, w), sample in zip(
@@ -362,9 +425,18 @@ def train(opts: Options) -> dict[str, Any]:  # pragma: no cover - exercised by m
                             strict=True,
                         )
                     ]
-                    metrics.add(sample.boxes, predicted)
+                    items.append((sample.boxes, predicted))
+                if "fire" in names:
+                    fire_scores = outputs.logits.sigmoid()[..., names.index("fire")]
+                    for row, sample in zip(fire_scores, batch["samples"], strict=True):
+                        if any(label == "fire" for label, _ in sample.boxes):
+                            fire_top.append(float(row.max()))
         model.train()
-        summary = metrics.summary()
+        summary = sweep(names, items)
+        # mean of the best fire score on fire images: near 0 means the head collapsed
+        summary["fire_top_score_mean"] = (
+            round(sum(fire_top) / len(fire_top), 4) if fire_top else "TBD"
+        )
         summary["loss"] = round(sum(losses) / len(losses), 4) if losses else "TBD"
         return summary
 
@@ -414,6 +486,8 @@ def train(opts: Options) -> dict[str, Any]:  # pragma: no cover - exercised by m
         }
         epochs.append(row)
         print(json.dumps({"epoch_done": row}), flush=True)
+        with (out / "epochs.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row) + "\n")  # survives lost stdout
         model.save_pretrained(out / "last")
         processor.save_pretrained(out / "last")
         fire_f1 = float(validation.get("fire", {}).get("f1", 0.0))
@@ -423,6 +497,15 @@ def train(opts: Options) -> dict[str, Any]:  # pragma: no cover - exercised by m
             processor.save_pretrained(out / "best")
         epoch += 1
     log.close()
+
+    # Final, untouched test split with the selected (best) weights.
+    test_result: dict[str, Any] = {"images": 0}
+    if test_set:
+        model = RTDetrForObjectDetection.from_pretrained(out / "best", local_files_only=True)
+        model.to(device)
+        test_loader = DataLoader(Frames(test_set, augment=False), shuffle=False, **loader_args)
+        test_result = evaluate(test_loader)
+        print(json.dumps({"test": test_result}), flush=True)
 
     dataset_record = json.loads((prep / "dataset.json").read_text(encoding="utf-8"))
     record: dict[str, Any] = {
@@ -443,6 +526,8 @@ def train(opts: Options) -> dict[str, Any]:  # pragma: no cover - exercised by m
         "best_fire_f1": best_f1,
         "epochs": epochs,
         "best_sha256": sha256_file(out / "best" / "model.safetensors"),
+        "test_images": len(test_set),
+        "test": test_result,
     }
     (out / "train_record.json").write_text(
         json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
