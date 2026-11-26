@@ -787,7 +787,7 @@ OutputCap = Literal["hud", "speaker", "haptic"]
   3. Gateway가 Observation으로 만들어 엔진 `step`
   4. 결과 응답
   - 프레임 바이트와 디코딩 이미지는 처리가 끝나면 버린다. DB, 파일, 로그에 남기지 않는다. `observations_meta`에는 지금처럼 메타데이터만 남긴다.
-- **모델 (TASK-42)**: 세션 미션이 요구하는 `object_detection` 모델을 서버가 처음 쓸 때 불러와 모든 세션이 함께 쓴다(모델마다 잠금 1개). 미션이 정해지면 그 모델을 미리 불러온다(warm-up). `weights: builtin`(mock) 모델은 아무것도 검출하지 않는다. 실제 모델은 `vision` 의존성과 sha256이 맞는 로컬 가중치가 있어야 하고, 없으면 503 `no_model_deployed`다. Provider 하한 점수는 `min(0.25, 미션 min_score)`다. `track_state` 모델(tracker)은 아직 서버에서 실행하지 않는다. 관리자가 명시적으로 배치하는 기능은 TASK-44다.
+- **모델 (TASK-42)**: 세션 미션이 요구하는 `object_detection` 모델을 서버가 처음 쓸 때 불러와 모든 세션이 함께 쓴다(모델마다 잠금 1개). 불러오기도 모델마다 한 번만 한다: 미션 warm-up과 첫 프레임이 동시에 요청하면 나중 요청은 진행 중인 불러오기를 기다려 그 결과를 쓴다. 실패한 불러오기는 저장하지 않아 다음 요청이 다시 시도하고, 다른 모델은 동시에 불러온다(TASK-48). 미션이 정해지면 그 모델을 미리 불러온다(warm-up). `weights: builtin`(mock) 모델은 아무것도 검출하지 않는다. 실제 모델은 `vision` 의존성과 sha256이 맞는 로컬 가중치가 있어야 하고, 없으면 503 `no_model_deployed`다. Provider 하한 점수는 `min(0.25, 미션 min_score)`다. `track_state` 모델(tracker)은 아직 서버에서 실행하지 않는다. 관리자가 명시적으로 배치하는 기능은 TASK-44다.
 - stream마다 처리 중인 프레임은 1개다. 처리 중에 온 요청은 즉시 `409 frame_busy`로 버리고 `skipped`로 센다. 클라이언트는 진행 중인 요청을 1개로 제한하고, 응답을 받은 뒤 그 시점의 최신 프레임을 보낸다. 간격은 `frame_interval_ms`보다 짧게 하지 않는다.
 - `VOA_FRAME_SYNC_TIMEOUT_MS` 안에 끝나면 `200`이고 아래 본문을 돌려준다. 넘으면 `202 {"frame_id", "status": "accepted"}`로 먼저 답하고, 끝나면 같은 본문을 제어 WebSocket `frame_result`로 보낸다.
 ```json
