@@ -182,6 +182,7 @@ class MainActivity : ComponentActivity(), ControlListener {
         val start = Button(this).apply { text = "이 미션으로 시작" }
         start.setOnClickListener {
             start.isEnabled = false
+            VoaSession.missionLabels = mission.scenarios.flatMap { it.labels }.toSet()
             choose(mission.missionId)
         }
         return LinearLayout(this).apply {

@@ -8,6 +8,8 @@ import ai.voa.client.output.StatusInput
 import ai.voa.client.protocol.AckMessage
 import ai.voa.client.protocol.AckStatus
 import ai.voa.client.protocol.AlertMessage
+import ai.voa.client.protocol.Detection
+import ai.voa.client.protocol.FrameResultMessage
 import ai.voa.client.protocol.FlashMode
 import ai.voa.client.protocol.HudCapabilities
 import ai.voa.client.protocol.NoticeMessage
@@ -28,6 +30,7 @@ import android.os.VibrationEffect
 import android.os.VibratorManager
 import android.speech.tts.TextToSpeech
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.view.WindowManager
@@ -40,6 +43,7 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -59,6 +63,10 @@ import kotlin.math.roundToInt
  * HUD(AND-04): alert/notice presentation을 이 기기에 맞게 줄여 그리고(HudRules), 음성(TTS)과
  * 진동을 내고, 표시 시작 때 played ACK를 보낸다. 상태 표시줄은 SPEC 7.4 규칙표를 그대로 쓴다.
  * 탐지 박스는 그리지 않는다.
+ *
+ * 글래스 모드(AND-04A): 광학식 글래스는 검정이 투명이므로 기본은 카메라 미리보기 끔(검정 바탕에
+ * HUD만). 미리보기를 켜면 화면을 꽉 채운다(레터박스 없음). 선택: 경고 때 판정한 프레임과 박스를
+ * 가운데에 잠깐 보여 준다. 두 설정은 기기에 저장한다(민감 정보 아님).
  */
 class DetectionActivity : ComponentActivity(), ControlListener {
     private lateinit var preview: PreviewView
@@ -68,6 +76,19 @@ class DetectionActivity : ComponentActivity(), ControlListener {
     private var ttsReady = false
     private val alerts = AlertTracker()
     private var announcedCapacity = false
+    private val prefs by lazy { getSharedPreferences("voa_display", MODE_PRIVATE) }
+    private var previewOn = false
+    private var showJudged = false
+    private var provider: ProcessCameraProvider? = null
+    private lateinit var previewButton: Button
+    private lateinit var judgedButton: Button
+    @Volatile private var encodeMs: Long? = null
+    @Volatile private var frameKb: Int? = null
+    @Volatile private var frameSize: String? = null
+
+    /** The frame the server is judging (by frame_id) and the last judged one, memory only. */
+    private val pendingFrames = java.util.concurrent.ConcurrentHashMap<String, Bitmap>()
+    @Volatile private var lastJudged: Pair<Bitmap, List<Detection>>? = null
     private val ticker = Handler(Looper.getMainLooper())
     private val tick = object : Runnable {
         override fun run() {
@@ -89,7 +110,9 @@ class DetectionActivity : ComponentActivity(), ControlListener {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         hideSystemBars()
         if (!VoaSession.connected || !VoaSession.missionConfirmed) return finish()
-        preview = PreviewView(this).apply { scaleType = PreviewView.ScaleType.FIT_CENTER }
+        previewOn = prefs.getBoolean("preview", false)
+        showJudged = prefs.getBoolean("judged", false)
+        preview = PreviewView(this).apply { scaleType = PreviewView.ScaleType.FILL_CENTER }
         hud = HudLayer(this)
         tts = TextToSpeech(this) { code ->
             ttsReady = code == TextToSpeech.SUCCESS
@@ -103,13 +126,35 @@ class DetectionActivity : ComponentActivity(), ControlListener {
         }
         val back = Button(this).apply { text = "미션 변경" }
         back.setOnClickListener { finish() }
+        previewButton = Button(this)
+        previewButton.setOnClickListener {
+            previewOn = !previewOn
+            prefs.edit().putBoolean("preview", previewOn).apply()
+            bindCamera()
+        }
+        judgedButton = Button(this)
+        judgedButton.setOnClickListener {
+            showJudged = !showJudged
+            prefs.edit().putBoolean("judged", showJudged).apply()
+            if (!showJudged) clearJudged()
+            labelButtons()
+        }
+        labelButtons()
         val root = FrameLayout(this).apply {
             setBackgroundColor(0xFF000000.toInt())
             addView(preview, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             addView(hud, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             // bottom-right: the HUD popup and status bar use the top of the glasses display
             addView(debug, FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT, Gravity.BOTTOM or Gravity.END))
-            addView(back, FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT, Gravity.BOTTOM or Gravity.START))
+            addView(
+                android.widget.LinearLayout(context).apply {
+                    orientation = android.widget.LinearLayout.HORIZONTAL
+                    addView(back)
+                    addView(previewButton)
+                    addView(judgedButton)
+                },
+                FrameLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT, Gravity.BOTTOM or Gravity.START),
+            )
         }
         setContentView(root)
         render()
@@ -136,6 +181,7 @@ class DetectionActivity : ComponentActivity(), ControlListener {
         analysis.shutdownNow()
         network.shutdownNow()
         tts?.shutdown()
+        clearJudged()
         if (isFinishing) VoaSession.disconnect() // leaving detection gives the slot back (TASK-47)
         super.onDestroy()
     }
@@ -143,25 +189,63 @@ class DetectionActivity : ComponentActivity(), ControlListener {
     private fun startCamera() {
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
-            val provider = future.get()
-            val previewUse = Preview.Builder().build().also { it.surfaceProvider = preview.surfaceProvider }
-            val analyzer = ImageAnalysis.Builder()
+            provider = future.get()
+            bindCamera()
+        }, ContextCompat.getMainExecutor(this))
+    }
+
+    /** Analysis always; the preview only when it is on (off = black = see-through on glasses). */
+    private fun bindCamera() {
+        val cameras = provider ?: return
+        labelButtons()
+        preview.visibility = if (previewOn) View.VISIBLE else View.INVISIBLE
+        val analyzer = ImageAnalysis.Builder()
+            .setResolutionSelector(
+                ResolutionSelector.Builder()
+                    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+                    .setResolutionStrategy(
+                        ResolutionStrategy(
+                            android.util.Size(640, 360),
+                            ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
+                        ),
+                    ).build(),
+            )
+            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+            .build()
+        analyzer.setAnalyzer(analysis) { image -> onFrame(image) }
+        cameras.unbindAll()
+        if (previewOn) {
+            val previewUse = Preview.Builder()
                 .setResolutionSelector(
                     ResolutionSelector.Builder()
-                        .setResolutionStrategy(
-                            ResolutionStrategy(
-                                android.util.Size(640, 480),
-                                ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
-                            ),
-                        ).build(),
-                )
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-                .build()
-            analyzer.setAnalyzer(analysis) { image -> onFrame(image) }
-            provider.unbindAll()
-            provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, previewUse, analyzer)
-        }, ContextCompat.getMainExecutor(this))
+                        .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY).build(),
+                ).build()
+                .also { it.surfaceProvider = preview.surfaceProvider }
+            cameras.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, previewUse, analyzer)
+        } else {
+            cameras.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, analyzer)
+        }
+    }
+
+    private fun labelButtons() {
+        if (!this::previewButton.isInitialized) return
+        previewButton.text = if (previewOn) "미리보기 끄기" else "미리보기 켜기"
+        judgedButton.text = if (showJudged) "검출 장면 끄기" else "검출 장면 켜기"
+    }
+
+    private fun clearJudged() {
+        pendingFrames.values.forEach { it.recycle() }
+        pendingFrames.clear()
+        lastJudged?.first?.recycle()
+        lastJudged = null
+    }
+
+    /** A result arrived for one of our frames: keep that frame as the judged scene. */
+    private fun judged(frameId: String, detections: List<Detection>) {
+        val frame = pendingFrames.remove(frameId) ?: return
+        lastJudged?.first?.recycle()
+        lastJudged = frame to detections
     }
 
     /** Called for each analysis frame; most are dropped until the uploader is due. */
@@ -169,14 +253,27 @@ class DetectionActivity : ComponentActivity(), ControlListener {
         val uploader = VoaSession.uploader
         if (uploader == null || !uploader.due()) return image.close()
         val captureNs = SystemClock.elapsedRealtimeNanos()
-        val jpeg = try {
-            toJpeg(image)
+        val began = SystemClock.elapsedRealtime()
+        val (jpeg, frame) = try {
+            toJpeg(image, keep = showJudged)
         } finally {
             image.close()
         }
+        encodeMs = SystemClock.elapsedRealtime() - began
+        frameKb = jpeg.size / 1024
         network.execute {
             val sentAt = SystemClock.elapsedRealtime()
             val outcome = uploader.upload(jpeg, captureNs)
+            if (frame != null) {
+                when (outcome) {
+                    is UploadOutcome.Processed -> {
+                        pendingFrames[outcome.result.frameId] = frame
+                        judged(outcome.result.frameId, outcome.result.results.flatMap { it.detections })
+                    }
+                    is UploadOutcome.Accepted -> pendingFrames[outcome.frameId] = frame // frame_result later
+                    else -> frame.recycle()
+                }
+            }
             if (outcome != UploadOutcome.NotDue && outcome !is UploadOutcome.Failed) {
                 VoaSession.lastResponseMs = SystemClock.elapsedRealtime()
             }
@@ -192,7 +289,8 @@ class DetectionActivity : ComponentActivity(), ControlListener {
         }
     }
 
-    private fun toJpeg(image: ImageProxy): ByteArray {
+    /** JPEG for the server; with `keep`, also the bitmap for the judged-scene view. */
+    private fun toJpeg(image: ImageProxy, keep: Boolean): Pair<ByteArray, Bitmap?> {
         var bitmap = image.toBitmap()
         val rotation = image.imageInfo.rotationDegrees
         val scale = MAX_SIDE.toFloat() / max(bitmap.width, bitmap.height)
@@ -205,10 +303,14 @@ class DetectionActivity : ComponentActivity(), ControlListener {
             if (transformed !== bitmap) bitmap.recycle()
             bitmap = transformed
         }
+        frameSize = "${bitmap.width}x${bitmap.height}"
         val out = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
-        bitmap.recycle()
-        return out.toByteArray()
+        if (!keep) {
+            bitmap.recycle()
+            return out.toByteArray() to null
+        }
+        return out.toByteArray() to bitmap
     }
 
     // --- display ---
@@ -235,6 +337,7 @@ class DetectionActivity : ComponentActivity(), ControlListener {
         when (message) {
             is AlertMessage -> onAlert(message)
             is NoticeMessage -> message.presentation?.let { present(it, interrupt = false) }
+            is FrameResultMessage -> judged(message.frameId, message.results.flatMap { it.detections })
             else -> Unit
         }
         render()
@@ -245,6 +348,10 @@ class DetectionActivity : ComponentActivity(), ControlListener {
         val id = message.alert.alertId
         if (alerts.firstTime(id)) {
             message.presentation?.let { present(it, interrupt = true) }
+            val scene = lastJudged
+            if (showJudged && scene != null) {
+                hud.showSnapshot(scene.first, scene.second, VoaSession.missionLabels, message.presentation?.showMs ?: 4000)
+            }
         }
         VoaSession.channel?.send(AckMessage(id, AckStatus.PLAYED))
     }
@@ -312,6 +419,7 @@ class DetectionActivity : ComponentActivity(), ControlListener {
             if (row.showStates && VoaSession.states.isNotEmpty()) {
                 append("\n" + VoaSession.states.entries.joinToString { "${it.key}: ${it.value.name.lowercase()}" })
             }
+            if (encodeMs != null) append("\n프레임 ${frameSize ?: "-"}  ${frameKb ?: "-"} KB  변환 ${encodeMs} ms")
             lastFailure?.let { append("\n마지막 실패: $it") }
             if (!ttsReady) append("\n음성 없음 (OQ-14)")
         }
