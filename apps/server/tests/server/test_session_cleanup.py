@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from starlette.websockets import WebSocketDisconnect
+from starlette.testclient import WebSocketDenialResponse
 
 from voa.server.app import create_app
 from voa.server.settings import Settings, SettingsError
@@ -127,11 +127,10 @@ def test_disconnected_session_is_ended_when_refresh_token_expires(workdir: Path)
             f"/v1/sessions/{sid}/refresh", json={"refresh_token": created["refresh_token"]}
         )
         assert refresh.status_code == 401
-        with c.websocket_connect(f"/v1/streams/{sid}") as ws:
-            ws.send_json({"type": "auth", "token": created["token"]})
-            with pytest.raises(WebSocketDisconnect) as closed:
-                ws.receive_json()
-        assert closed.value.code == 4401
+        bearer = {"Authorization": f"Bearer {created['token']}"}
+        with pytest.raises(WebSocketDenialResponse) as denied:
+            c.websocket_connect(f"/v1/streams/{sid}", headers=bearer).__enter__()
+        assert denied.value.status_code == 401  # swept session: refused in the handshake
     assert tick_task.cancelled()
     assert ended_at(workdir, sid) is not None
 
@@ -154,8 +153,8 @@ def test_connected_session_is_kept_until_it_disconnects(workdir: Path) -> None:
         created = c.post("/v1/sessions", json=BODY).json()
         sid = created["session_id"]
         runtime = c.app.state.runtime  # type: ignore[attr-defined]
-        with c.websocket_connect(f"/v1/streams/{sid}") as ws:
-            ws.send_json({"type": "auth", "token": created["token"]})
+        bearer = {"Authorization": f"Bearer {created['token']}"}
+        with c.websocket_connect(f"/v1/streams/{sid}", headers=bearer) as ws:
             assert ws.receive_json()["type"] == "auth_ok"
             mono.now += 700 * S
             assert sweep(c, mono.now) == []

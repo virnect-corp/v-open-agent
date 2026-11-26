@@ -210,8 +210,8 @@ def connected(client: TestClient) -> Iterator[tuple[dict[str, Any], WebSocketTes
             "capabilities": {"inputs": ["camera_0"], "outputs": ["hud"]},
         },
     ).json()
-    with client.websocket_connect(f"/v1/streams/{session['session_id']}") as ws:
-        ws.send_json({"type": "auth", "token": session["token"]})
+    bearer = {"Authorization": f"Bearer {session['token']}"}
+    with client.websocket_connect(f"/v1/streams/{session['session_id']}", headers=bearer) as ws:
         assert next_of(ws, "auth_ok")
         yield session, ws
 

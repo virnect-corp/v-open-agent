@@ -178,6 +178,26 @@ def test_importing_the_app_module_does_not_start_or_read_config(
     assert module.app is not None
 
 
+def test_uvicorn_options_use_tls_for_network_exposure(tmp_path: Path) -> None:
+    cert, key = tmp_path / "c.pem", tmp_path / "k.pem"
+    cert.write_text("c", encoding="utf-8")
+    key.write_text("k", encoding="utf-8")
+    lan = uvicorn_options(
+        settings(
+            tmp_path,
+            ALLOW_INSECURE_DEV="false",
+            BIND="0.0.0.0",
+            TLS_CERT=str(cert),
+            TLS_KEY=str(key),
+        )
+    )
+    assert lan["ssl_certfile"] == str(cert) and lan["ssl_keyfile"] == str(key)
+    compose = uvicorn_options(
+        settings(tmp_path, ALLOW_INSECURE_DEV="false", BIND="0.0.0.0", EXPOSURE="loopback")
+    )
+    assert "ssl_certfile" not in compose
+
+
 def test_uvicorn_options_dev_and_pilot(tmp_path: Path) -> None:
     dev = uvicorn_options(settings(tmp_path, BIND="127.0.0.1", PORT="9000"))
     logging_options = {"log_config": server_log_config(), "access_log": False}

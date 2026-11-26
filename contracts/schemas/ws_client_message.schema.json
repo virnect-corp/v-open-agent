@@ -112,27 +112,6 @@
       "title": "AsrPayload",
       "type": "object"
     },
-    "AuthMessage": {
-      "additionalProperties": false,
-      "properties": {
-        "token": {
-          "maxLength": 256,
-          "title": "Token",
-          "type": "string"
-        },
-        "type": {
-          "const": "auth",
-          "title": "Type",
-          "type": "string"
-        }
-      },
-      "required": [
-        "type",
-        "token"
-      ],
-      "title": "AuthMessage",
-      "type": "object"
-    },
     "Detection": {
       "additionalProperties": false,
       "properties": {
@@ -623,15 +602,11 @@
     "mapping": {
       "ack": "#/$defs/AckMessage",
       "alert_sync": "#/$defs/AlertSyncMessage",
-      "auth": "#/$defs/AuthMessage",
       "observation": "#/$defs/ObservationMessage"
     },
     "propertyName": "type"
   },
   "oneOf": [
-    {
-      "$ref": "#/$defs/AuthMessage"
-    },
     {
       "$ref": "#/$defs/AlertSyncMessage"
     },

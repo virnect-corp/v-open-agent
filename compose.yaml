@@ -90,6 +90,7 @@ services:
       VOA_PROFILE: dev-mock
       VOA_BIND: 0.0.0.0           # 컨테이너 내부 bind. 외부 노출 범위는 ports 가 결정
       VOA_ALLOW_INSECURE_DEV: "false" # 0.0.0.0 bind에서 secret 생략 금지
+      VOA_EXPOSURE: loopback      # 0.0.0.0 bind 이지만 ports 가 호스트 127.0.0.1 로만 내보냄 (ADR-0009, TLS 불필요)
       VOA_PORT: "8765"
       VOA_DB_PATH: /data/voa.sqlite3
       VOA_POLICY_PROFILE: ${VOA_POLICY_PROFILE:-config/profiles/indoor_research_v0.yaml}

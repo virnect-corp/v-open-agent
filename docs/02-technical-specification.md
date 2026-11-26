@@ -574,7 +574,7 @@ devices:
   - `outputs`가 비어 있으면 400 `no_output_capability`다. 경고를 출력할 수 없는 장치에는 세션을 열지 않는다.
   - **세션 정리 (ADR-0005)**: WebSocket 연결이 없고 refresh token이 만료된 세션은 정리한다. tick 루프를 멈추고 엔진과 token digest를 메모리에서 지우며 `sessions.ended_at_utc`를 기록한다. 정리된 세션의 refresh와 WebSocket 핸드셰이크는 401이다. 연결 중인 세션은 refresh token이 만료돼도 연결이 끝날 때까지 유지하고, 연결이 끊긴 뒤 다음 정리 검사에서 정리한다. 정리 검사는 `VOA_SESSION_SWEEP_INTERVAL_S`마다 한다.
   - `required_streams`가 `inputs`에 없는 시나리오는 그 세션 동안 계속 `unknown`이다. 이를 위해 서버는 세션을 시작할 때, 선언되지 않은 각 stream에 대해 `health(status="down", detail_code="not_declared")` 관측을 엔진에 먼저 넣는다. 엔진 API는 추가하지 않는다.
-- **TLS (ADR-0009)**: `VOA_BIND`가 `127.0.0.1`이 아니면 `VOA_TLS_CERT`, `VOA_TLS_KEY`가 필수이고 모든 REST는 https, WebSocket은 wss다. 없으면 서버는 시작하지 않는다.
+- **TLS (ADR-0009)**: 포트가 네트워크에 노출되면(`VOA_EXPOSURE=network`) `VOA_TLS_CERT`, `VOA_TLS_KEY`가 필수이고 모든 REST는 https, WebSocket은 wss다. 없으면 서버는 시작하지 않는다. `VOA_EXPOSURE`가 비어 있으면 `VOA_BIND`가 `127.0.0.1`일 때 `loopback`, 아니면 `network`로 본다. 컨테이너처럼 `0.0.0.0`에 bind하지만 호스트의 `127.0.0.1`로만 포트를 내보내는 경우에는 운영자가 `VOA_EXPOSURE=loopback`으로 선언한다(compose `server` 서비스, TASK-40).
 - `VOA_ALLOW_INSECURE_DEV=true`는 bind 주소가 `127.0.0.1`일 때만 허용한다. 이때 장치 `dev_fixture`는 secret 없이 세션을 만들 수 있다.
 - `POST /v1/sessions`와 refresh endpoint를 제외한 세션 범위 REST API는 `Authorization: Bearer <access token>`을 요구한다. token은 URL, query, 로그에 넣지 않는다. 해당 token의 session과 path의 session이 다르면 404 `not_found`로 응답한다.
 - REST 오류 본문은 `{"code": "<stable_code>"}`다. 인증 실패는 원인과 관계없이 401 `{"code":"unauthorized"}`, capability 범위 위반은 400 `capability_not_allowed`, 빈 outputs는 400 `no_output_capability`다. 요청 원문과 secret은 응답에 넣지 않는다.
@@ -860,7 +860,8 @@ VOA_PROFILE=dev-mock                 # dev-mock | pilot
 VOA_BIND=127.0.0.1
 VOA_PORT=8765
 VOA_ALLOW_INSECURE_DEV=true          # pilot 에서는 false 강제
-VOA_TLS_CERT=                        # pilot, 또는 VOA_BIND 가 127.0.0.1 이 아니면 필수 (없으면 시작 거부, ADR-0009)
+VOA_EXPOSURE=                        # loopback | network. 비면 VOA_BIND 로 추론 (127.0.0.1 → loopback)
+VOA_TLS_CERT=                        # pilot, 또는 VOA_EXPOSURE=network 이면 필수 (없으면 시작 거부, ADR-0009)
 VOA_TLS_KEY=
 VOA_POLICY_PROFILE=config/profiles/indoor_research_v0.yaml  # 미션 도입 전 단일 profile. 처음 시작 시 미션 v1로 가져옴 (ADR-0010)
 VOA_DEFAULT_MISSION=                 # mission_id 를 생략한 세션의 미션. 비면 장치가 고를 때까지 미션 없음
@@ -895,7 +896,7 @@ VOA_FRAME_INTERVAL_MAX_MS=1000       # 부하 시 서버가 늘릴 수 있는 �
 
 어떤 모델을 쓸지는 `VOA_POLICY_PROFILE`(시나리오의 `required_models`)과 `VOA_MODELS_DIR`(manifest)이 정한다. `weights: file` 모델의 가중치는 `VOA_MODEL_WEIGHTS_DIR/<model_id>/` 아래에 사용자가 미리 받아 둔 파일만 읽고, 로드 전에 manifest의 `sha256`과 대조한다. 서버는 가중치를 다운로드하지 않는다(`VOA_MODEL_AUTO_DOWNLOAD=false`). manifest 대조가 실패하면 서버는 시작하되 `readyz` 503을 반환하고 엔진은 `ProfileError`로 만든다(INV-10).
 
-`python -m voa.server`는 운영 진입점이다. `VOA_BIND`, `VOA_PORT`로 uvicorn을 시작하고 `VOA_PROFILE=pilot`이거나 `VOA_BIND`가 `127.0.0.1`이 아니면 검증된 `VOA_TLS_CERT`, `VOA_TLS_KEY`를 uvicorn SSL 인자로 넘긴다. `server.app:app`을 import하는 것만으로 서버를 시작하지 않는다.
+`python -m voa.server`는 운영 진입점이다. `VOA_BIND`, `VOA_PORT`로 uvicorn을 시작하고 `VOA_PROFILE=pilot`이거나 `VOA_EXPOSURE`가 `network`이면 검증된 `VOA_TLS_CERT`, `VOA_TLS_KEY`를 uvicorn SSL 인자로 넘긴다. `server.app:app`을 import하는 것만으로 서버를 시작하지 않는다.
 
 ### 8.4 Docker 실행 규약
 

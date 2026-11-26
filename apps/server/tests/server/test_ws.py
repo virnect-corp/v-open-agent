@@ -1,4 +1,7 @@
-"""TASK-18 WebSocket stream <-> engine (SPEC 7.2, 7.4; COM-02, DEV-01, T-R17)."""
+"""TASK-18 WebSocket stream <-> engine (SPEC 7.2, 7.4; COM-02, DEV-01, T-R17).
+
+TASK-40: authentication moved into the handshake (ADR-0009).
+"""
 
 import contextlib
 import json
@@ -10,10 +13,9 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from starlette.testclient import WebSocketTestSession
+from starlette.testclient import WebSocketDenialResponse, WebSocketTestSession
 from starlette.websockets import WebSocketDisconnect
 
-from voa.server import ws as ws_module
 from voa.server.app import create_app
 from voa.server.settings import Settings
 
@@ -62,8 +64,13 @@ class Harness:
         assert response.status_code == 200
         return dict(response.json())
 
-    def connect(self, session: dict[str, Any]) -> WebSocketTestSession:
-        return self.client.websocket_connect(f"/v1/streams/{session['session_id']}")
+    def connect(
+        self, session: dict[str, Any], token: str | None = None, **kwargs: Any
+    ) -> WebSocketTestSession:
+        headers = {"Authorization": f"Bearer {token or session['token']}"}
+        return self.client.websocket_connect(
+            f"/v1/streams/{session['session_id']}", headers=headers, **kwargs
+        )
 
     def obstacle(self, *, present: bool = True, stream: str = "camera_0") -> dict[str, Any]:
         self.seq += 1
@@ -111,7 +118,6 @@ def receive(ws: WebSocketTestSession, *, skip: tuple[str, ...] = ("heartbeat",))
 def authed(h: Harness, session: dict[str, Any]) -> WebSocketTestSession:
     ws = h.connect(session).__enter__()
     h.open.append(ws)
-    ws.send_json({"type": "auth", "token": session["token"]})
     ok = receive(ws)
     assert ok["type"] == "auth_ok" and ok["session_id"] == session["session_id"]
     return ws
@@ -124,66 +130,86 @@ def closed_with(ws: WebSocketTestSession, code: int) -> None:
     assert error.value.code == code
 
 
-# --- Authentication (4401) ---
+# --- Handshake authentication (ADR-0009, TASK-40) ---
 
 
-def test_auth_ok_reports_session_and_server_time(harness: Harness) -> None:
+def refused(harness: Harness, path: str, **kwargs: Any) -> int:
+    """Status of the refused handshake; fails (never hangs) if the socket was accepted."""
+    try:
+        ws = harness.client.websocket_connect(path, **kwargs).__enter__()
+    except WebSocketDenialResponse as denied:
+        return int(denied.status_code)
+    harness.open.append(ws)  # closed by the fixture
+    raise AssertionError("handshake was accepted without a valid token")
+
+
+def test_header_token_opens_the_stream_with_auth_ok(harness: Harness) -> None:
     session = harness.session()
     with harness.connect(session) as ws:
-        ws.send_json({"type": "auth", "token": session["token"]})
         ok = receive(ws)
-    assert ok["type"] == "auth_ok"
+        assert ws.accepted_subprotocol is None
+    assert ok["type"] == "auth_ok" and ok["session_id"] == session["session_id"]
     assert ok["server_time_utc"].endswith("Z")
 
 
-@pytest.mark.parametrize("case", ["wrong_token", "other_session", "unknown_session"])
-def test_bad_token_closes_4401(harness: Harness, case: str) -> None:
-    a, b = harness.session(), harness.session()
-    path_session = {"wrong_token": a, "other_session": a, "unknown_session": {"session_id": "x"}}
-    token = {"wrong_token": "nope", "other_session": b["token"], "unknown_session": a["token"]}
-    with harness.connect(path_session[case]) as ws:
-        ws.send_json({"type": "auth", "token": token[case]})
-        closed_with(ws, 4401)
-
-
-def test_expired_token_closes_4401(harness: Harness) -> None:
+def test_browser_subprotocol_token_echoes_only_voa_v1(harness: Harness) -> None:
     session = harness.session()
-    harness.mono.now += 900 * 1000 * MS  # VOA_TOKEN_TTL_S default 900
-    with harness.connect(session) as ws:
-        ws.send_json({"type": "auth", "token": session["token"]})
-        closed_with(ws, 4401)
-
-
-def test_no_auth_within_timeout_closes_4401(
-    harness: Harness, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(ws_module, "AUTH_TIMEOUT_S", 0.2)
-    with harness.connect(harness.session()) as ws:
-        closed_with(ws, 4401)
+    protocols = ["voa.v1", f"voa.bearer.{session['token']}"]
+    path = f"/v1/streams/{session['session_id']}"
+    with harness.client.websocket_connect(path, subprotocols=protocols) as ws:
+        assert receive(ws)["type"] == "auth_ok"
+        assert ws.accepted_subprotocol == "voa.v1"
 
 
 @pytest.mark.parametrize(
-    "first",
-    [
-        {"type": "alert_sync", "last_alert_seq": 0},
-        {"type": "ack", "alert_id": "a1", "status": "received"},
-    ],
-)
-def test_other_message_before_auth_is_protocol_error(
-    harness: Harness, first: dict[str, Any]
-) -> None:
-    with harness.connect(harness.session()) as ws:
-        ws.send_json(first)
-        assert receive(ws)["code"] == "protocol_error"
-        closed_with(ws, 4401)
+    "case",
+    ["no_token", "wrong_token", "other_session", "unknown_session", "basic_scheme",
+     "bearer_without_voa_v1", "two_bearer_protocols"],
+)  # fmt: skip
+def test_bad_handshake_is_refused_with_401(harness: Harness, case: str) -> None:
+    a, b = harness.session(), harness.session()
+    path = f"/v1/streams/{a['session_id']}"
+    options: dict[str, dict[str, Any]] = {
+        "no_token": {},
+        "wrong_token": {"headers": {"Authorization": "Bearer nope"}},
+        "other_session": {"headers": {"Authorization": f"Bearer {b['token']}"}},
+        "unknown_session": {"headers": {"Authorization": f"Bearer {a['token']}"}},
+        "basic_scheme": {"headers": {"Authorization": f"Basic {a['token']}"}},
+        "bearer_without_voa_v1": {"subprotocols": [f"voa.bearer.{a['token']}"]},
+        "two_bearer_protocols": {
+            "subprotocols": ["voa.v1", f"voa.bearer.{a['token']}", "voa.bearer.x"]
+        },
+    }
+    kwargs = options[case]
+    if case == "unknown_session":
+        path = "/v1/streams/sess_unknown"
+    assert refused(harness, path, **kwargs) == 401
 
 
-def test_second_auth_is_protocol_error(harness: Harness) -> None:
+def test_expired_token_is_refused_with_401(harness: Harness) -> None:
+    session = harness.session()
+    harness.mono.now += 900 * 1000 * MS  # VOA_TOKEN_TTL_S default 900
+    path = f"/v1/streams/{session['session_id']}"
+    headers = {"Authorization": f"Bearer {session['token']}"}
+    assert refused(harness, path, headers=headers) == 401
+
+
+def test_retired_auth_message_is_unsupported(harness: Harness) -> None:
     session = harness.session()
     ws = authed(harness, session)
     ws.send_json({"type": "auth", "token": session["token"]})
+    assert receive(ws)["code"] == "unsupported_message_type"
+
+
+def test_second_alert_sync_is_a_protocol_error_and_the_stream_stays_open(
+    harness: Harness,
+) -> None:
+    ws = authed(harness, harness.session())
+    ws.send_json({"type": "alert_sync", "last_alert_seq": 0})
+    ws.send_json({"type": "alert_sync", "last_alert_seq": 0})
     assert receive(ws)["code"] == "protocol_error"
-    closed_with(ws, 4401)
+    ws.send_json({"type": "nope"})
+    assert receive(ws)["code"] == "unsupported_message_type"  # still open
 
 
 # --- Observations -> decisions and alerts (COM-02) ---

@@ -40,8 +40,7 @@ def test_client_messages_parse_by_type() -> None:
 @pytest.mark.parametrize(
     "data",
     [
-        {"type": "auth"},
-        {"type": "auth", "token": "t", "extra": 1},
+        {"type": "auth", "token": "t"},  # retired by ADR-0009: handshake authentication
         {"type": "alert_sync", "last_alert_seq": -1},
         {"type": "ack", "alert_id": "a1", "status": "sent"},
         {"type": "frame", "jpeg": "..."},

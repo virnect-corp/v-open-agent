@@ -15,6 +15,7 @@ T = TypeVar("T")
 DEFAULTS: dict[str, str] = {
     "VOA_PROFILE": "dev-mock",
     "VOA_BIND": "127.0.0.1",
+    "VOA_EXPOSURE": "",
     "VOA_PORT": "8765",
     "VOA_ALLOW_INSECURE_DEV": "true",
     "VOA_TLS_CERT": "",
@@ -37,6 +38,7 @@ DEFAULTS: dict[str, str] = {
     "VOA_MODEL_AUTO_DOWNLOAD": "false",
 }
 LOOPBACK = "127.0.0.1"
+Exposure = Literal["loopback", "network"]
 
 
 class SettingsError(ValueError):
@@ -49,6 +51,7 @@ class SettingsError(ValueError):
 class Settings:
     profile: ServerProfile
     bind: str
+    exposure: Exposure  # loopback | network (ADR-0009; empty = inferred from bind)
     port: int
     allow_insecure_dev: bool
     tls_cert: Path | None
@@ -94,6 +97,7 @@ class Settings:
         settings = cls(
             profile=profile,
             bind=raw["VOA_BIND"],
+            exposure=parse("VOA_EXPOSURE", lambda v: _exposure(v, raw["VOA_BIND"]), "network"),
             port=parse("VOA_PORT", int, 0),
             allow_insecure_dev=parse("VOA_ALLOW_INSECURE_DEV", _bool, False),
             tls_cert=optional_path("VOA_TLS_CERT"),
@@ -119,6 +123,11 @@ class Settings:
         if bad:
             raise SettingsError(bad)
         return settings
+
+    @property
+    def tls_required(self) -> bool:
+        """TLS for pilot and for any network exposure (ADR-0009)."""
+        return self.profile == "pilot" or self.exposure == "network"
 
     def _violations(self) -> list[str]:
         bad: list[str] = []
@@ -150,12 +159,25 @@ class Settings:
             bad.append("VOA_MODEL_AUTO_DOWNLOAD")
         if self.allow_insecure_dev and (self.profile == "pilot" or self.bind != LOOPBACK):
             bad.append("VOA_ALLOW_INSECURE_DEV")
-        if self.profile == "pilot":
+        if self.tls_required:
             if self.tls_cert is None or not self.tls_cert.is_file():
                 bad.append("VOA_TLS_CERT")
             if self.tls_key is None or not self.tls_key.is_file():
                 bad.append("VOA_TLS_KEY")
         return bad
+
+
+def _exposure(value: str, bind: str) -> "Exposure":
+    """Who can reach the port. Empty: loopback only when bound to 127.0.0.1.
+
+    `loopback` with another bind is an operator declaration, e.g. a container bound
+    to 0.0.0.0 whose port is published on the host's 127.0.0.1 only (compose).
+    """
+    if value == "":
+        return "loopback" if bind == LOOPBACK else "network"
+    if value in ("loopback", "network"):
+        return "loopback" if value == "loopback" else "network"
+    raise ValueError
 
 
 def _bool(value: str) -> bool:

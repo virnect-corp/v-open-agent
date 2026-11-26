@@ -5,7 +5,8 @@ The client never judges risk. It sends observation Drafts, renders `alert` and
 - ACK: `received` right after parsing and the alert_id duplicate check, `played`
   after at least one output rendered. A repeated alert_id is not rendered again;
   only `played` is re-sent (DEV-02, T-R10).
-- Reconnect: REST `refresh` -> WebSocket `auth` -> `alert_sync(last_alert_seq)`
+- Reconnect: REST `refresh` -> WebSocket handshake (`Authorization: Bearer`, ADR-0009)
+  -> `alert_sync(last_alert_seq)`
   (ADR-0006). If the server lost the session (refresh 401, e.g. after a restart),
   a new session is created and the alert cursor restarts at 0 (SPEC 7.1).
 - Watchdog: `watchdog_ms` without any server message renders the built-in
@@ -36,7 +37,6 @@ from voa.contracts.messages import (
     AdmissionMessage,
     AlertMessage,
     AlertSyncMessage,
-    AuthMessage,
     AuthOkMessage,
     DecisionMessage,
     ErrorMessage,
@@ -359,9 +359,11 @@ class GlassClient:
         creds = self._credentials
         assert creds is not None
         async with connect(
-            self.config.ws_url(creds.session_id), proxy=None, open_timeout=HTTP_TIMEOUT_S
+            self.config.ws_url(creds.session_id),
+            proxy=None,
+            open_timeout=HTTP_TIMEOUT_S,
+            additional_headers={"Authorization": f"Bearer {creds.token}"},  # ADR-0009
         ) as ws:
-            await ws.send(AuthMessage(type="auth", token=creds.token).model_dump_json())
             first = await asyncio.wait_for(ws.recv(), AUTH_OK_TIMEOUT_S)
             if not isinstance(self._parse(first), AuthOkMessage):
                 raise _LinkDown()
