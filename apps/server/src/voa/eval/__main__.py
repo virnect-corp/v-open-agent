@@ -45,7 +45,12 @@ def _parser() -> argparse.ArgumentParser:
         "--weights-dir",
         default=os.environ.get("VOA_MODEL_WEIGHTS_DIR", str(SERVER_ROOT / "var" / "models")),
     )
-    parser.add_argument("--score-floor", type=float, default=DEFAULT_SCORE_FLOOR)
+    parser.add_argument(
+        "--score-floor",
+        type=float,
+        default=None,
+        help="provider score floor (default: the lower of 0.25 and the profile min_score)",
+    )
     parser.add_argument(
         "--tick-ms", type=int, default=100, help="engine tick interval (server default 100)"
     )
@@ -84,7 +89,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     manifest = manifests[model_ids[0]]
 
     try:
-        provider = load_detector(manifest, Path(args.weights_dir), score_floor=args.score_floor)
+        floor = args.score_floor
+        if floor is None:  # never drop evidence the profile would accept (fire_c1: 0.05)
+            floor = min(DEFAULT_SCORE_FLOOR, profile.params.min_score)
+        provider = load_detector(manifest, Path(args.weights_dir), score_floor=floor)
     except (WeightsError, VisionUnavailable, ValueError) as error:
         return _fail(str(error))
 

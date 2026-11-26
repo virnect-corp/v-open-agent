@@ -1,14 +1,16 @@
 # Stage C1 fire profile (ADR-0008). First real scenario: flames anywhere in view.
 # Smoke is emitted by the model and recorded, but no scenario uses it yet.
-# The detector is the C1a zero-shot model; C1b swaps required_models to the
-# fine-tuned one. Thresholds are verification defaults, revisited with OQ-06.
-# min_score 0.45 (TASK-33): on walk01 (office, no fire) the zero-shot model scored a
-# white wall and ceiling lights as `fire` at 0.29-0.38 in every frame; 0.3 warned.
+# v2 (TASK-39): evidence model is the C1b fine-tuned detector `rtdetr-r18-dfire`.
+# The C1a zero-shot model (omdet-turbo-fire) stays registered for exploration only:
+# it scored a candle body and office walls as fire (ADR-0008 Results).
+# min_score 0.05: the C1b model learns IoU-aware scores that stay low (ADR-0008
+# Results, TASK-38). On D-Fire val, 0.06 gives 1% and 0.041 gives 5% false fire
+# images; on walk01 (office) no frame exceeded 0.050. Revisit with OQ-06.
 profile_id: fire_c1
-profile_version: 1
+profile_version: 2
 degraded_notice_text: "카메라 상태를 확인할 수 없어 감지가 제한됩니다."
 params:
-  min_score: 0.45
+  min_score: 0.05
   roi_min_overlap: 0.3
   confirm_frames: 3
   clear_frames: 3
@@ -20,7 +22,7 @@ params:
 scenarios:
   - id: fire_in_view
     required_kinds: [object_detection]
-    required_models: {object_detection: omdet-turbo-fire}
+    required_models: {object_detection: rtdetr-r18-dfire}
     required_streams: [camera_0]
     labels: [fire]
     motion_classes: []
