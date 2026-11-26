@@ -835,7 +835,15 @@ OutputCap = Literal["hud", "speaker", "haptic"]
   3. 근거 모델 가중치 준비
   4. 배치(없으면 자동 배치)
   - 실패하면 400 `profile_invalid`, `profile_model_mismatch`, `model_not_ready` 중 하나이고, 게시본은 이전 버전 그대로다.
-- 저장: `VOA_ACTIVE_CONFIG_DIR/missions/<mission_id>/v<version>.yaml`과 `draft.yaml`. 처음 시작할 때 `config/profiles/*.yaml`을 같은 ID의 미션 v1로 가져온다.
+- 저장: `VOA_ACTIVE_CONFIG_DIR/missions/<mission_id>/`에 `mission.yaml`(이름, 설명, 상태, 최신 버전), `v<version>.yaml`(엔진 profile 형식 그대로), `v<version>.settings.yaml`(그 버전의 미션 설정 `{frame_interval_ms, hud_style_map}`, 없으면 서버 기본값), `draft.yaml`(`{profile, settings}`, 게시하면 지움). 처음 시작할 때 `config/profiles/*.yaml`을 같은 ID의 미션 v1로 가져온다(설정 파일 없음).
+- 미션 설정 적용: `frame_interval_ms`는 미션 값, 없으면 서버 값이다(세션 응답, `mission` 메시지, `PUT .../mission` 응답, `GET /v1/missions`에 실림). HUD 스타일은 미션 `hud_style_map`(시나리오 > 등급), 관리자 settings `hud_style_map`(시나리오 > 등급), 기본 스타일 순으로 고른다(§7.4, TASK-44B).
+- 요청과 응답 (TASK-44A):
+  - `POST /v1/admin/missions` → 201 요약 `{mission_id, name, description, status, latest_version, has_draft, sessions}`. 형식이 틀린 ID 400 `invalid_request`, 이미 있음 409 `mission_exists`, 복제 원본 없음 404 `mission_not_found`. 빈 미션은 초안 없이 `draft` 상태로 시작한다. 복제는 원본의 초안(없으면 최신 게시본)을 `profile_id`만 바꿔 초안으로 둔다.
+  - `GET /v1/admin/missions/{id}` → 요약 + `draft: {profile, settings} | null` + `published: {version, profile, settings} | null`.
+  - `PUT /v1/admin/missions/{id}` `{name?, description?, profile?, settings?}`: `profile`이나 `settings`가 오면 초안(없으면 최신 게시본에서 시작)의 그 부분을 바꾼다. 내용 검증은 `:validate`/`:publish`에서 하고, 설정 형식(간격 100~5000, 짧은 식별자)만 여기서 400으로 거른다. 게시본이 없는 미션에 `profile` 없이 설정만 오면 400.
+  - `:validate` → `{valid: true, next_version}` 또는 400(`draft_missing`, `profile_invalid`, `profile_model_mismatch`). `:publish`는 여기에 근거 모델 로드(가중치 sha256 확인, 메모리에 올림)를 더하고 실패하면 400 `model_not_ready`. 성공 시 `{mission_id, version, status: "published"}`. 초안의 `profile_version`은 무시하고 서버가 `최신 + 1`로 정한다. `profile_id`는 미션 ID와 같아야 한다. 보관된 미션도 다시 게시하면 `published`가 된다.
+  - `DELETE` → 보관된 요약. 진행 중 세션이 그 미션을 쓰면 409 `mission_in_use`. 보관한 기본 미션은 새 세션에 주지 않는다(미션 없이 시작).
+  - `GET .../versions` → `{versions: [{version, profile, settings}]}` 최신 먼저. `GET /v1/admin/changes` → `{changes: [...]}` 최신 먼저(최대 200). `action`: `mission_create`, `mission_update`, `mission_publish`, `mission_archive`, `result_code`: `ok` 또는 오류 code(실패도 기록).
 - 배치 하한 점수: 실제 Provider 하한은 `min(배치 score_floor, 그 모델을 근거로 쓰는 게시 미션 시나리오들의 min_score)`이다. 그래야 profile이 받아들일 근거를 Provider가 먼저 버리지 않는다.
 - 모든 변경(배치, 해제, 미션 생성, 수정, 게시, 보관, settings)은 `admin_changes`에 기록한다. 요청 원문과 token은 남기지 않는다.
 

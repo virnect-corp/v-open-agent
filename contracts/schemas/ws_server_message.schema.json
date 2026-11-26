@@ -557,6 +557,12 @@
       "additionalProperties": false,
       "description": "The session's mission was set or changed (ADR-0010).",
       "properties": {
+        "frame_interval_ms": {
+          "maximum": 5000,
+          "minimum": 100,
+          "title": "Frame Interval Ms",
+          "type": "integer"
+        },
         "mission_id": {
           "maxLength": 128,
           "minLength": 1,
@@ -583,7 +589,8 @@
       "required": [
         "mission_id",
         "version",
-        "name"
+        "name",
+        "frame_interval_ms"
       ],
       "title": "MissionMessage",
       "type": "object"

@@ -44,6 +44,13 @@ def load_profile(path: str | Path) -> PolicyProfile | ProfileError:
 
     if not isinstance(data, dict):
         return ProfileError("yaml_invalid", f"{profile_path}:root")
+    return parse_profile(data, str(profile_path))
+
+
+def parse_profile(data: object, source: str) -> PolicyProfile | ProfileError:
+    """Validate already-parsed profile data (e.g. an admin's mission draft, TASK-44A)."""
+    if not isinstance(data, dict):
+        return ProfileError("profile_invalid", f"{source}:root")
     try:
         return PolicyProfile.model_validate(data)
     except ValidationError as error:
@@ -55,4 +62,4 @@ def load_profile(path: str | Path) -> PolicyProfile | ProfileError:
                 )
             }
         )
-        return ProfileError("profile_invalid", f"{profile_path}:{','.join(locations)}")
+        return ProfileError("profile_invalid", f"{source}:{','.join(locations)}")

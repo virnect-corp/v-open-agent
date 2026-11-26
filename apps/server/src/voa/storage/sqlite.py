@@ -17,7 +17,7 @@ from voa.contracts.observation import Observation
 
 _Value = str | int | None
 MetadataRow = dict[str, _Value]
-_Table = Literal["sessions", "observations_meta", "decisions", "alerts", "users"]
+_Table = Literal["sessions", "observations_meta", "decisions", "alerts", "users", "admin_changes"]
 
 _COLUMNS: dict[_Table, tuple[str, ...]] = {
     "sessions": ("session_id", "device_id", "user_id", "started_at_utc", "ended_at_utc"),
@@ -67,6 +67,16 @@ _COLUMNS: dict[_Table, tuple[str, ...]] = {
         "password_change_required",
         "created_at_utc",
         "updated_at_utc",
+    ),
+    # Admin change log (ADR-0009): what changed and the outcome, never the request body.
+    "admin_changes": (
+        "id",
+        "changed_at_utc",
+        "action",
+        "target",
+        "from_version",
+        "to_version",
+        "result_code",
     ),
 }
 
@@ -131,6 +141,15 @@ CREATE TABLE IF NOT EXISTS users (
     password_change_required INTEGER NOT NULL,
     created_at_utc TEXT NOT NULL,
     updated_at_utc TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS admin_changes (
+    id INTEGER PRIMARY KEY,
+    changed_at_utc TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target TEXT NOT NULL,
+    from_version INTEGER,
+    to_version INTEGER,
+    result_code TEXT NOT NULL
 );
 """
 
@@ -246,6 +265,37 @@ class SQLiteStore:
         rows = self._connection.execute(
             f"SELECT {', '.join(columns)} FROM users "
             "ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, created_at_utc, username"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def record_admin_change(
+        self,
+        *,
+        changed_at_utc: datetime,
+        action: str,
+        target: str,
+        result_code: str,
+        from_version: int | None = None,
+        to_version: int | None = None,
+    ) -> int:
+        """Append one admin change (SPEC 8.1). Not purged by retention."""
+        return self._save(
+            "admin_changes",
+            (
+                None,
+                _utc_text(changed_at_utc),
+                action,
+                target,
+                from_version,
+                to_version,
+                result_code,
+            ),
+        )
+
+    def list_admin_changes(self, limit: int = 200) -> list[MetadataRow]:
+        columns = _COLUMNS["admin_changes"]
+        rows = self._connection.execute(
+            f"SELECT {', '.join(columns)} FROM admin_changes ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
         return [dict(row) for row in rows]
 
