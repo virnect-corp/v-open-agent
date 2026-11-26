@@ -64,6 +64,9 @@ object VoaSession {
         private set
 
     var mission: MissionRef? = null
+
+    /** Labels the chosen mission judges on (from the mission list), for the judged-scene view. */
+    var missionLabels: Set<String> = emptySet()
     var missionConfirmed = false
 
     @Volatile var states: Map<String, RiskState> = emptyMap()
