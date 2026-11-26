@@ -63,6 +63,13 @@ class C2ExamplesTest {
     }
 
     @Test
+    fun `login response decodes and hides its token`() {
+        val login = decode<LoginResponse>("login_response")
+        assertEquals("wearer", login.role)
+        assertTrue(!login.toString().contains("tok_example_login"))
+    }
+
+    @Test
     fun `the removed auth message is no longer a client message`() {
         assertFailsWith<ProtocolParseException> {
             ProtocolContract.decodeClientMessage("""{"type":"auth","token":"t"}""")
@@ -70,9 +77,11 @@ class C2ExamplesTest {
     }
 
     @Test
-    fun `a session request names exactly one credential`() {
+    fun `a session request names at most one credential`() {
         val caps = SessionCapabilities(listOf(InputCap.CAMERA_0), listOf(OutputCap.HUD))
-        assertFailsWith<ProtocolParseException> { CreateSessionRequest(capabilities = caps) }
+        val byLogin = CreateSessionRequest(missionId = "fire_c1", capabilities = caps) // bearer login (TASK-47)
+        val body0 = ProtocolContract.json.encodeToString(CreateSessionRequest.serializer(), byLogin)
+        assertTrue(!body0.contains("username") && !body0.contains("device_id") && body0.contains("\"mission_id\":\"fire_c1\""))
         assertFailsWith<ProtocolParseException> {
             CreateSessionRequest(deviceId = "dev_01", username = "kim", capabilities = caps)
         }

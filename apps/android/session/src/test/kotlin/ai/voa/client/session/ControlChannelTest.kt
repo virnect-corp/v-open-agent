@@ -282,4 +282,38 @@ class SessionApiTest {
         server.shutdown()
         assertEquals(ApiResult.Failed(0, "network"), api.createSession(request))
     }
+
+    @Test
+    fun `login holds no session, connecting sends the login token and the mission, disconnect deletes`() {
+        val api = SessionApi(server.url("/"), client)
+        server.enqueue(
+            MockResponse().setBody(
+                """{"token":"login_tok","token_expires_at_utc":"2026-11-26T07:15:00Z","role":"wearer","password_change_required":false}""",
+            ),
+        )
+        val login = api.login(ai.voa.client.protocol.LoginRequest("kim", "pw-1"))
+        assertEquals("login_tok", (login as ApiResult.Ok).value.token)
+        assertEquals("/v1/auth/login", server.takeRequest().path)
+
+        server.enqueue(
+            MockResponse().setBody(
+                """{"session_id":"sess_01","token":"t","token_expires_at_utc":"2026-11-26T07:15:00Z",""" +
+                    """"refresh_token":"r","refresh_token_expires_at_utc":"2026-11-27T07:00:00Z",""" +
+                    """"heartbeat_ms":1000,"watchdog_ms":3000,"frame_interval_ms":333,""" +
+                    """"mission":{"mission_id":"fire_c1","version":1,"name":"fire_c1","frame_interval_ms":333}}""",
+            ),
+        )
+        api.createSession(CreateSessionRequest(missionId = "fire_c1", capabilities = caps), loginToken = "login_tok")
+        val connect = server.takeRequest()
+        assertEquals("Bearer login_tok", connect.getHeader("Authorization"))
+        val body = connect.body.readUtf8()
+        assertTrue(body.contains("\"mission_id\":\"fire_c1\"") && !body.contains("username") && !body.contains("password"))
+
+        server.enqueue(MockResponse().setResponseCode(204))
+        assertEquals(ApiResult.Ok(Unit), api.disconnect("sess_01", "session_tok"))
+        val delete = server.takeRequest()
+        assertEquals("DELETE", delete.method)
+        assertEquals("/v1/sessions/sess_01", delete.path)
+        assertEquals("Bearer session_tok", delete.getHeader("Authorization"))
+    }
 }

@@ -47,10 +47,11 @@ data class CreateSessionRequest(
     val capabilities: SessionCapabilities,
 ) {
     init {
-        if ((deviceId == null) == (username == null)) {
+        // 장치 credential, 계정, 또는 둘 다 없음(헤더의 로그인 token으로 연결, TASK-47)
+        if (deviceId != null && username != null) {
             throw ProtocolParseException(
                 ProtocolParseException.CODE_REJECTED_SCHEMA,
-                "exactly one of device_id or username",
+                "device_id and username cannot both be set",
             )
         }
         deviceId?.let { ProtocolValidation.requireValidId(it, "device_id") }
@@ -71,6 +72,27 @@ data class MissionRef(
     @SerialName("frame_interval_ms")
     val frameIntervalMs: Int,
 )
+
+/** 계정 로그인 (ADR-0011). 정원을 차지하지 않는다; 연결은 미션을 고를 때 (TASK-47). */
+@Serializable
+data class LoginRequest(
+    val username: String,
+    val password: String,
+) {
+    override fun toString(): String = "LoginRequest(username=$username, password=<redacted>)"
+}
+
+@Serializable
+data class LoginResponse(
+    val token: String,
+    @SerialName("token_expires_at_utc")
+    val tokenExpiresAtUtc: String,
+    val role: String, // admin | wearer
+    @SerialName("password_change_required")
+    val passwordChangeRequired: Boolean,
+) {
+    override fun toString(): String = "LoginResponse(token=<redacted>, role=$role)"
+}
 
 @Serializable
 data class SignupRequest(

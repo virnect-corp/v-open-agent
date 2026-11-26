@@ -3,6 +3,8 @@ package ai.voa.client.session
 import ai.voa.client.protocol.ApiErrorResponse
 import ai.voa.client.protocol.CreateSessionRequest
 import ai.voa.client.protocol.CreateSessionResponse
+import ai.voa.client.protocol.LoginRequest
+import ai.voa.client.protocol.LoginResponse
 import ai.voa.client.protocol.MissionRef
 import ai.voa.client.protocol.MissionsResponse
 import ai.voa.client.protocol.ProtocolContract
@@ -42,8 +44,23 @@ class SessionApi(
     fun signup(request: SignupRequest): ApiResult<SignupResponse> =
         post("v1/auth/signup", request, SignupRequest.serializer(), SignupResponse.serializer(), token = null)
 
-    fun createSession(request: CreateSessionRequest): ApiResult<CreateSessionResponse> =
-        post("v1/sessions", request, CreateSessionRequest.serializer(), CreateSessionResponse.serializer(), token = null)
+    /** 계정 로그인: 로그인 token만 받고 정원은 차지하지 않는다 (TASK-47). */
+    fun login(request: LoginRequest): ApiResult<LoginResponse> =
+        post("v1/auth/login", request, LoginRequest.serializer(), LoginResponse.serializer(), token = null)
+
+    /** 연결: `loginToken`이 있으면 헤더로 보낸다(본문에 계정 없음). */
+    fun createSession(request: CreateSessionRequest, loginToken: String? = null): ApiResult<CreateSessionResponse> =
+        post("v1/sessions", request, CreateSessionRequest.serializer(), CreateSessionResponse.serializer(), token = loginToken)
+
+    /** 연결 해제: 세션을 끝내 정원을 돌려준다. 로그인은 유지된다 (TASK-47). */
+    fun disconnect(sessionId: String, sessionToken: String): ApiResult<Unit> =
+        try {
+            client.newCall(builder("v1/sessions/$sessionId", sessionToken).delete().build()).execute().use { response ->
+                if (response.isSuccessful) ApiResult.Ok(Unit) else ApiResult.Failed(response.code, "http_${response.code}")
+            }
+        } catch (_: IOException) {
+            ApiResult.Failed(0, "network")
+        }
 
     fun refresh(sessionId: String, refreshToken: String): ApiResult<RefreshSessionResponse> =
         post(

@@ -10,6 +10,7 @@ from pathlib import Path
 from pydantic import TypeAdapter
 
 from voa.contracts.messages import ServerMessage
+from voa.server.accounts import LoginResponse
 from voa.server.auth import MissionRef, SessionCreated
 
 EXAMPLES = json.loads(
@@ -38,3 +39,8 @@ def test_every_server_message_example_validates_and_round_trips() -> None:
 
 def test_mission_refs_in_examples_match() -> None:
     MissionRef.model_validate(EXAMPLES["session_created"]["mission"])
+
+
+def test_login_response_example_matches() -> None:
+    login = LoginResponse.model_validate(EXAMPLES["login_response"])
+    assert login.model_dump(mode="json") == EXAMPLES["login_response"]

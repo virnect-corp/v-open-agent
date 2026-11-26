@@ -1,14 +1,7 @@
 package ai.voa.client
 
-import ai.voa.client.protocol.CreateSessionRequest
-import ai.voa.client.protocol.FlashMode
-import ai.voa.client.protocol.HudCapabilities
-import ai.voa.client.protocol.InputCap
-import ai.voa.client.protocol.MissionMessage
+import ai.voa.client.protocol.LoginRequest
 import ai.voa.client.protocol.MissionSummary
-import ai.voa.client.protocol.OutputCap
-import ai.voa.client.protocol.ServerMessage
-import ai.voa.client.protocol.SessionCapabilities
 import ai.voa.client.protocol.SignupRequest
 import ai.voa.client.session.ApiResult
 import ai.voa.client.session.ControlListener
@@ -38,17 +31,17 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 class MainActivity : ComponentActivity(), ControlListener {
     private var lastServer = "http://127.0.0.1:8765" // kept between screens; the password is not
     private var lastUser = ""
-    private var linkText: TextView? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (VoaSession.active) showMissions() else showLogin(error = null)
+        if (VoaSession.loggedIn) showMissions() else showLogin(error = null)
     }
 
     override fun onResume() {
         super.onResume()
         VoaSession.screen = this
-        if (VoaSession.active) showMissions()
+        if (VoaSession.connected) VoaSession.disconnect() // back from detection: give the slot back
+        if (VoaSession.loggedIn) showMissions(error = VoaSession.notice.also { VoaSession.notice = null })
     }
 
     override fun onPause() {
@@ -57,14 +50,13 @@ class MainActivity : ComponentActivity(), ControlListener {
     }
 
     override fun onDestroy() {
-        if (isFinishing) VoaSession.stop() // closing the app logs out
+        if (isFinishing) VoaSession.logout() // closing the app disconnects and logs out
         super.onDestroy()
     }
 
     // --- login ---
 
     private fun showLogin(error: String?, notice: String? = null) {
-        linkText = null
         val server = field("서버 주소", lastServer, InputType.TYPE_TEXT_VARIATION_URI)
         val user = field("아이디", lastUser, InputType.TYPE_CLASS_TEXT)
         val pass = field("비밀번호", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD)
@@ -102,26 +94,16 @@ class MainActivity : ComponentActivity(), ControlListener {
         )
     }
 
+    /** Login checks the account only and holds no slot (TASK-47). */
     private fun login(url: HttpUrl, username: String, password: String, deviceLabel: String) {
         val api = SessionApi(url, VoaSession.client)
-        val request = CreateSessionRequest(
-            username = username,
-            password = password,
-            deviceLabel = deviceLabel,
-            capabilities = SessionCapabilities(
-                inputs = listOf(InputCap.CAMERA_0),
-                outputs = listOf(OutputCap.HUD, OutputCap.SPEAKER, OutputCap.HAPTIC),
-                hud = HudCapabilities(
-                    color = true,
-                    flashModes = listOf(FlashMode.NONE, FlashMode.BORDER, FlashMode.FULL_SCREEN),
-                    maxLines = 2,
-                ),
-            ),
-        )
         lifecycleScope.launch {
-            when (val result = withContext(Dispatchers.IO) { api.createSession(request) }) {
+            when (val result = withContext(Dispatchers.IO) { api.login(LoginRequest(username, password)) }) {
                 is ApiResult.Ok -> {
-                    VoaSession.start(url, api, result.value)
+                    if (result.value.passwordChangeRequired) {
+                        return@launch showLogin(Messages.of("password_change_required"))
+                    }
+                    VoaSession.signedIn(url, api, result.value, deviceLabel)
                     showMissions()
                 }
                 is ApiResult.Failed -> showLogin(Messages.of(result.code))
@@ -156,9 +138,6 @@ class MainActivity : ComponentActivity(), ControlListener {
     // --- missions (AND-03) ---
 
     private fun showMissions(error: String? = null) {
-        val link = TextView(this).apply { textSize = 16f }
-        linkText = link
-        renderLink(VoaSession.channel?.state ?: LinkState.CONNECTING)
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val status = TextView(this).apply {
             text = error ?: "미션 목록을 불러오는 중"
@@ -166,25 +145,31 @@ class MainActivity : ComponentActivity(), ControlListener {
         }
         val logout = Button(this).apply { text = "로그아웃" }
         logout.setOnClickListener {
-            VoaSession.stop()
+            VoaSession.logout()
             showLogin(error = null, notice = "로그아웃했습니다.")
         }
         setContentView(
             column(
                 title("미션"),
-                muted("무엇을 감시할지 고르면, 그 미션에 맞는 모델과 규칙으로 감지를 시작합니다."),
-                link, status, list, logout,
+                muted("무엇을 감시할지 고르면 서버에 연결해 그 미션의 모델과 규칙으로 감지를 시작합니다."),
+                status, list, logout,
             ),
         )
         val api = VoaSession.api ?: return showLogin(null)
-        val token = VoaSession.tokens?.token ?: return showLogin(null)
+        val token = VoaSession.missionsToken() ?: return showLogin(null)
         lifecycleScope.launch {
             when (val result = withContext(Dispatchers.IO) { api.missions(token) }) {
                 is ApiResult.Ok -> {
                     status.text = if (result.value.missions.isEmpty()) "게시된 미션이 없습니다." else ""
                     result.value.missions.forEach { list.addView(missionCard(it)) }
                 }
-                is ApiResult.Failed -> status.text = Messages.of(result.code)
+                is ApiResult.Failed ->
+                    if (result.status == 401) {
+                        VoaSession.logout()
+                        showLogin(Messages.of("unauthorized"))
+                    } else {
+                        status.text = Messages.of(result.code)
+                    }
             }
         }
     }
@@ -205,40 +190,23 @@ class MainActivity : ComponentActivity(), ControlListener {
         }
     }
 
+    /** Connect with the chosen mission, then open the landscape detection screen (TASK-47). */
     private fun choose(missionId: String) {
-        val api = VoaSession.api ?: return
-        val session = VoaSession.created ?: return
-        val token = VoaSession.tokens?.token ?: return
         lifecycleScope.launch {
-            when (val result = withContext(Dispatchers.IO) { api.selectMission(session.sessionId, missionId, token) }) {
-                is ApiResult.Ok -> {
-                    VoaSession.confirmMission(result.value)
-                    startActivity(Intent(this@MainActivity, DetectionActivity::class.java))
-                }
-                is ApiResult.Failed -> showMissions(Messages.of(result.code))
+            when (val result = withContext(Dispatchers.IO) { VoaSession.connect(missionId) }) {
+                is ApiResult.Ok -> startActivity(Intent(this@MainActivity, DetectionActivity::class.java))
+                is ApiResult.Failed ->
+                    if (result.status == 401) {
+                        VoaSession.logout()
+                        showLogin(Messages.of("unauthorized"))
+                    } else {
+                        showMissions(Messages.of(result.code))
+                    }
             }
         }
     }
 
-    // --- connection events ---
-
-    override fun onState(state: LinkState) = renderLink(state)
-
-    override fun onMessage(message: ServerMessage) {
-        if (message is MissionMessage) renderLink(VoaSession.channel?.state ?: LinkState.CONNECTING)
-    }
-
-    override fun onCapacity(retryAfterS: Int?) {
-        linkText?.text = Messages.of("capacity_exceeded")
-    }
-
-    private fun renderLink(state: LinkState) {
-        if (state == LinkState.UNAUTHORIZED) {
-            VoaSession.stop()
-            return showLogin(Messages.of("unauthorized"))
-        }
-        linkText?.text = "연결: ${linkLabel(state)}"
-    }
+    // The mission screen holds no connection; detection shows the link state.
 }
 
 fun linkLabel(state: LinkState): String = when (state) {

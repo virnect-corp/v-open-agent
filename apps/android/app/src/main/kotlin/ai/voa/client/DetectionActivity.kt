@@ -60,7 +60,7 @@ class DetectionActivity : ComponentActivity(), ControlListener {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         hideSystemBars()
-        if (!VoaSession.active || !VoaSession.missionConfirmed) return finish()
+        if (!VoaSession.connected || !VoaSession.missionConfirmed) return finish()
         preview = PreviewView(this).apply { scaleType = PreviewView.ScaleType.FIT_CENTER }
         status = TextView(this).apply {
             setTextColor(0xFFFFFFFF.toInt())
@@ -105,6 +105,7 @@ class DetectionActivity : ComponentActivity(), ControlListener {
     override fun onDestroy() {
         analysis.shutdownNow()
         network.shutdownNow()
+        if (isFinishing) VoaSession.disconnect() // leaving detection gives the slot back (TASK-47)
         super.onDestroy()
     }
 
@@ -187,7 +188,10 @@ class DetectionActivity : ComponentActivity(), ControlListener {
     }
 
     override fun onState(state: LinkState) {
-        if (state == LinkState.UNAUTHORIZED) return finish()
+        if (state == LinkState.UNAUTHORIZED) { // the server ended the session (e.g. idle)
+            VoaSession.notice = "연결이 끝났습니다. 미션을 다시 고르면 새로 연결합니다."
+            return finish()
+        }
         render()
     }
 
