@@ -8,7 +8,9 @@ Real detectors get the JPEG bytes and decode them in memory (Pillow, `vision`
 group); nothing is written or logged. Loading never downloads (ADR-0007).
 """
 
+import asyncio
 import threading
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -68,12 +70,27 @@ class ModelPool:
     weights_root: Path
     factory: DetectorFactory = default_factory
     _detectors: dict[str, Detector] = field(default_factory=dict)
-    _locks: dict[str, threading.Lock] = field(default_factory=dict)
+    _locks: dict[str, asyncio.Lock] = field(default_factory=dict)
     _guard: threading.Lock = field(default_factory=threading.Lock)
+    _recent: dict[str, deque[int]] = field(default_factory=dict)
 
-    def lock(self, model_id: str) -> threading.Lock:
-        with self._guard:
-            return self._locks.setdefault(model_id, threading.Lock())
+    def lock(self, model_id: str) -> asyncio.Lock:
+        """One inference at a time per model. asyncio.Lock wakes waiters in arrival order,
+        and each session has at most one frame in flight per stream, so sessions take
+        turns (round-robin, ADR-0010) and one busy session cannot starve another."""
+        return self._locks.setdefault(model_id, asyncio.Lock())
+
+    def record(self, model_id: str, now_ns: int) -> None:
+        self._recent.setdefault(model_id, deque()).append(now_ns)
+
+    def per_minute(self, now_ns: int) -> dict[str, int]:
+        """Inferences per model over the last minute (GET /v1/admin/capacity)."""
+        counts = {}
+        for model_id, times in self._recent.items():
+            while times and now_ns - times[0] > 60_000_000_000:
+                times.popleft()
+            counts[model_id] = len(times)
+        return counts
 
     def detector(self, model_id: str) -> Detector:
         """Load once (blocking: call from a worker thread)."""

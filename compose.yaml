@@ -104,5 +104,39 @@ services:
     ports:
       - "127.0.0.1:8765:8765"     # 기본은 호스트 loopback 만. LAN 노출은 pilot 단계에서 결정
 
+  # 실모델 서버 (ADR-0009, TASK-43). `docker compose --profile server-vision up server-vision`
+  # - server 와 같고 이미지에 vision(CPU torch)이 더해져 업로드된 프레임을 실제 모델로 추론한다.
+  #   예) VOA_DEFAULT_MISSION=fire_c1 docker compose --profile server-vision up server-vision
+  server-vision:
+    profiles: ["server-vision"]
+    image: v-open-agent:server-vision
+    build:
+      <<: *server-build
+      target: server-vision
+    working_dir: /workspace/apps/server
+    command: ["python", "-m", "voa.server"]
+    environment:
+      PYTHONPATH: /workspace/apps/server/src
+      VOA_PROFILE: dev-mock
+      VOA_BIND: 0.0.0.0
+      VOA_EXPOSURE: loopback      # ports 가 호스트 127.0.0.1 로만 내보냄 (ADR-0009)
+      VOA_ALLOW_INSECURE_DEV: "false"
+      VOA_PORT: "8765"
+      VOA_DB_PATH: /data/voa.sqlite3
+      VOA_POLICY_PROFILE: ${VOA_POLICY_PROFILE:-config/profiles/indoor_research_v0.yaml}
+      VOA_DEFAULT_MISSION: ${VOA_DEFAULT_MISSION:-}
+      VOA_MODELS_DIR: ${VOA_MODELS_DIR:-config/models}
+      VOA_MODEL_WEIGHTS_DIR: /models
+      VOA_ACTIVE_CONFIG_DIR: /data/config
+      VOA_DEVICES_FILE: ${VOA_DEVICES_FILE:-config/devices.yaml}
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    volumes:
+      - .:/workspace
+      - ${VOA_MODEL_WEIGHTS_HOST:-./apps/server/var/models}:/models:ro
+      - voa-data:/data
+    ports:
+      - "127.0.0.1:8765:8765"
+
 volumes:
   voa-data:

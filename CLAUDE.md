@@ -30,6 +30,7 @@
   scripts/dev.sh                             # 전체 검사 = 컨테이너에서 scripts/check.sh
   scripts/dev.sh pytest -q apps/server/tests/contracts  # 임의 명령
   docker compose --profile server up server  # 서버 실행 (TASK-16 이후), http://127.0.0.1:8765
+  VOA_DEFAULT_MISSION=fire_c1 docker compose --profile server-vision up server-vision  # 실모델 서버(CPU torch), 프레임 업로드 추론
   scripts/vision.sh pytest -q -m model apps/server/tests/contracts/test_rtdetr_provider.py  # Stage C0 실모델 (ADR-0007)
   scripts/extract-frames.sh <video> <name> [fps]   # 영상 -> apps/server/var/frames/<name> (Docker ffmpeg)
   scripts/vision.sh python -m voa.eval --frames apps/server/var/frames/<name> --fps 5  # C0 평가 보고서

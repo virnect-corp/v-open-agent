@@ -154,6 +154,9 @@ class SessionRegistry:
     def remove(self, session_id: str) -> None:
         self._sessions.pop(session_id, None)
 
+    def count(self) -> int:
+        return len(self._sessions)
+
     def for_user(self, user_id: str) -> list[str]:
         return [s.session_id for s in self._sessions.values() if s.user_id == user_id]
 

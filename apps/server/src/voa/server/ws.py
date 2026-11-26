@@ -22,6 +22,7 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from voa.contracts.messages import (
     CLIENT_TYPES,
+    ERROR_TEXT,
     AckMessage,
     AlertMessage,
     AlertSyncMessage,
@@ -29,6 +30,7 @@ from voa.contracts.messages import (
     ClientEnvelope,
     ClientMessage,
     ErrorCode,
+    ErrorMessage,
     HeartbeatMessage,
     ObservationMessage,
     error_message,
@@ -40,6 +42,7 @@ if TYPE_CHECKING:
     from voa.server.app import ServerRuntime
 
 CLOSE_UNAUTHORIZED = 4401  # server-side close of an authenticated socket (e.g. session swept)
+CLOSE_CAPACITY = 4503  # session limit reached (ADR-0010)
 SUBPROTOCOL = "voa.v1"
 BEARER_PREFIX = "voa.bearer."
 
@@ -62,7 +65,10 @@ def parse_client_message(event: Mapping[str, Any]) -> ClientMessage | ErrorCode:
 
 
 async def _send(websocket: WebSocket, message: BaseModel) -> None:
-    await websocket.send_text(message.model_dump_json())
+    # Errors carry capacity fields only for capacity_exceeded: leave them out otherwise.
+    await websocket.send_text(
+        message.model_dump_json(exclude_none=isinstance(message, ErrorMessage))
+    )
 
 
 async def push_messages(
@@ -169,6 +175,22 @@ def register_stream_routes(app: FastAPI) -> None:
             await _refuse(websocket)
             return
         await websocket.accept(subprotocol=subprotocol)
+        if (
+            session_id not in runtime.connections
+            and len(runtime.connections) >= runtime.settings.max_sessions
+        ):  # ADR-0010: tell the browser why, then close (its handshake cannot read a body)
+            body = runtime.capacity_body()
+            await websocket.send_text(
+                ErrorMessage(
+                    code="capacity_exceeded",
+                    message=ERROR_TEXT["capacity_exceeded"],
+                    active=int(str(body["active"])),
+                    max=int(str(body["max"])),
+                    retry_after_s=int(str(body["retry_after_s"])),
+                ).model_dump_json(exclude_none=True)
+            )
+            await websocket.close(code=CLOSE_CAPACITY)
+            return
 
         await _send(
             websocket,
