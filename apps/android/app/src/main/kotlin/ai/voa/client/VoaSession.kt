@@ -1,10 +1,11 @@
 package ai.voa.client
 
+import ai.voa.client.protocol.AckMessage
+import ai.voa.client.protocol.AckStatus
+import ai.voa.client.protocol.AlertMessage
 import ai.voa.client.protocol.ConfigMessage
 import ai.voa.client.protocol.CreateSessionRequest
 import ai.voa.client.protocol.CreateSessionResponse
-import ai.voa.client.protocol.FlashMode
-import ai.voa.client.protocol.HudCapabilities
 import ai.voa.client.protocol.InputCap
 import ai.voa.client.protocol.LoginResponse
 import ai.voa.client.protocol.OutputCap
@@ -74,6 +75,14 @@ object VoaSession {
     /** A message for the mission screen after detection ended on its own (e.g. session ended). */
     var notice: String? = null
 
+    /** Whether the device has a TTS engine (AOSP devices may not, OQ-14). Set at app start. */
+    @Volatile var speechAvailable = true
+
+    // status bar inputs (SPEC 7.4, AND-04)
+    @Volatile var capacity = false
+    @Volatile var lastServerMessageMs: Long? = null
+    @Volatile var lastResponseMs: Long? = null
+
     /** 지금 화면에 연결 이벤트를 넘긴다(한 번에 하나). */
     var screen: ControlListener? = null
 
@@ -101,12 +110,8 @@ object VoaSession {
             deviceLabel = deviceLabel,
             capabilities = SessionCapabilities(
                 inputs = listOf(InputCap.CAMERA_0),
-                outputs = listOf(OutputCap.HUD, OutputCap.SPEAKER, OutputCap.HAPTIC),
-                hud = HudCapabilities(
-                    color = true,
-                    flashModes = listOf(FlashMode.NONE, FlashMode.BORDER, FlashMode.FULL_SCREEN),
-                    maxLines = 2,
-                ),
+                outputs = listOfNotNull(OutputCap.HUD, OutputCap.SPEAKER.takeIf { speechAvailable }, OutputCap.HAPTIC),
+                hud = DetectionActivity.PHONE_HUD,
             ),
         )
         val result = sessionApi.createSession(request, loginToken)
@@ -199,6 +204,9 @@ object VoaSession {
         missionConfirmed = false
         states = emptyMap()
         lastResult = null
+        capacity = false
+        lastServerMessageMs = null
+        lastResponseMs = null
     }
 
     /** 업로드는 제어 연결이 인증되고 미션이 확정된 뒤에만 (ADR-0009). */
@@ -208,12 +216,19 @@ object VoaSession {
 
     private object Forwarder : ControlListener {
         override fun onState(state: LinkState) {
+            if (state == LinkState.CAPACITY) capacity = true
             refreshGate()
             main.post { screen?.onState(state) }
         }
 
         override fun onMessage(message: ServerMessage) {
+            lastServerMessageMs = SystemClock.elapsedRealtime()
             when (message) {
+                is AlertMessage -> {
+                    // received ACK right after parsing (SPEC 7.4); played comes when the HUD shows it
+                    channel?.let { it.lastAlertSeq = maxOf(it.lastAlertSeq, message.alertSeq) }
+                    channel?.send(AckMessage(message.alert.alertId, AckStatus.RECEIVED))
+                }
                 is ConfigMessage -> uploader?.intervalMs = message.frameIntervalMs
                 is MissionMessage -> {
                     mission = MissionRef(message.missionId, message.version, message.name, message.frameIntervalMs)
@@ -233,6 +248,7 @@ object VoaSession {
         }
 
         override fun onCapacity(retryAfterS: Int?) {
+            capacity = true
             main.post { screen?.onCapacity(retryAfterS) }
         }
     }

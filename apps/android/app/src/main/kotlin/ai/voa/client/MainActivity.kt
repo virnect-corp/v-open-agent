@@ -11,6 +11,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.speech.tts.TextToSpeech
 import android.text.InputType
 import android.widget.Button
 import android.widget.LinearLayout
@@ -34,6 +35,9 @@ class MainActivity : ComponentActivity(), ControlListener {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        VoaSession.speechAvailable = packageManager
+            .queryIntentServices(Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE), 0)
+            .isNotEmpty()
         if (VoaSession.loggedIn) showMissions() else showLogin(error = null)
     }
 
@@ -88,7 +92,7 @@ class MainActivity : ComponentActivity(), ControlListener {
                 title("VOA 글래스"),
                 muted("착용자 또는 관리자 계정으로 로그인합니다. 앱을 닫으면 로그아웃됩니다."),
                 server.first, user.first, pass.first,
-                muted("장치: ${deviceLabel()}"),
+                muted("장치: ${deviceLabel()}" + if (VoaSession.speechAvailable) "" else " (음성 엔진 없음: 경고는 화면과 진동으로만)"),
                 status, login, signup,
             ),
         )
