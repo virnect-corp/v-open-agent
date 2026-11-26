@@ -23,7 +23,7 @@ from fastapi.responses import JSONResponse
 from voa.config.missions import MissionStore, MissionVersion
 from voa.config.model_registry import check_profile_models, load_manifests
 from voa.config.profile_loader import load_profile
-from voa.contracts.messages import MissionMessage
+from voa.contracts.messages import ConfigMessage, MissionMessage, Presentation
 from voa.engine.profile import PolicyProfile, ProfileError
 from voa.server.accounts import (
     ADMIN_USERNAME,
@@ -54,6 +54,15 @@ from voa.server.auth import (
 )
 from voa.server.devices import DeviceConfig, load_devices
 from voa.server.frames import FrameState, register_frame_routes
+from voa.server.hud import (
+    ATTENTION_DEFAULT,
+    DEGRADED_DEFAULT,
+    NOTICE_KEY,
+    AdminSettings,
+    SettingsStore,
+    choose_style,
+    present,
+)
 from voa.server.inference import DetectorFactory, ModelPool, ModelUnavailable, default_factory
 from voa.server.logconfig import pin_log_levels
 from voa.server.runtime import AnchoredUtcClock, SecureIdFactory
@@ -131,6 +140,8 @@ class ServerRuntime:
     session_started: dict[str, tuple[str, datetime, str | None]] = field(default_factory=dict)
     models: ModelPool = field(default_factory=lambda: ModelPool({}, Path(".")))
     frame_states: dict[str, FrameState] = field(default_factory=dict)
+    admin_settings: AdminSettings | None = None  # None = the defaults from VOA_* settings
+    settings_valid: bool = True
     streams: dict[str, SessionStream] = field(default_factory=dict)
     connections: dict[str, WebSocket] = field(default_factory=dict)
     tick_tasks: dict[str, "asyncio.Task[None]"] = field(default_factory=dict)
@@ -162,10 +173,14 @@ class ServerRuntime:
             settings.model_weights_dir,
             detector_factory,
         )
+        settings_store = SettingsStore(settings.active_config_dir, settings.frame_interval_ms)
+        admin_settings, settings_valid = settings_store.load()
         return cls(
             settings=settings,
             profile=profile,
             models=pool,
+            admin_settings=admin_settings,
+            settings_valid=settings_valid,
             missions=missions,
             default_mission=mission if isinstance(mission, MissionVersion) else None,
             store=store,
@@ -218,6 +233,9 @@ class ServerRuntime:
             now_mono_ns=now_mono_ns,
             input_queue_max=self.settings.input_queue_max,
         )
+        stream.presenter = lambda kind, scenario_id, text: self.presentation(
+            mission, kind, scenario_id, text
+        )
         self.streams[session_id] = stream
         self.session_missions[session_id] = mission
         if session_id in self.frame_states:  # a new mission brings its own frame interval
@@ -227,11 +245,58 @@ class ServerRuntime:
         self._warm_up(mission)
         return stream
 
+    @property
+    def current_settings(self) -> AdminSettings:
+        if self.admin_settings is None:
+            return AdminSettings(frame_interval_ms=self.settings.frame_interval_ms)
+        return self.admin_settings
+
     def interval_for(self, mission: MissionVersion | None) -> int:
-        """The mission's recommended frame interval, else the server's (ADR-0010)."""
+        """The mission's recommended frame interval, else the admin setting (ADR-0010)."""
         if mission is not None and mission.settings.frame_interval_ms is not None:
             return mission.settings.frame_interval_ms
-        return self.settings.frame_interval_ms
+        return self.current_settings.frame_interval_ms
+
+    def presentation(
+        self, mission: MissionVersion, kind: str, scenario_id: str, text: str
+    ) -> Presentation:
+        """SPEC 7.4: mission map, then admin map (scenario > severity), then the default.
+
+        Read at send time, so a settings change applies from the next alert.
+        """
+        settings = self.current_settings
+        styles = settings.styles()
+        if kind == "notice":
+            keys: tuple[str, ...] = (NOTICE_KEY,)
+            default = DEGRADED_DEFAULT
+        else:
+            severity = next(
+                (s.severity for s in mission.profile.scenarios if s.id == scenario_id), ""
+            )
+            keys = (scenario_id, severity)
+            default = ATTENTION_DEFAULT
+        style_id = choose_style(
+            keys, mission.settings.hud_style_map, settings.hud_style_map, styles, default
+        )
+        return present(style_id, styles, text)
+
+    async def apply_settings(self, settings: AdminSettings) -> None:
+        """Adopt new admin settings; tell sessions whose frame interval changed (`config`)."""
+        before = {sid: self.interval_for(m) for sid, m in self.session_missions.items()}
+        self.admin_settings = settings
+        self.settings_valid = True
+        for session_id, mission in list(self.session_missions.items()):
+            interval = self.interval_for(mission)
+            if interval == before.get(session_id):
+                continue
+            if session_id in self.frame_states:
+                self.frame_states[session_id] = self.new_frame_state(session_id)
+            websocket = self.connections.get(session_id)
+            if websocket is not None:
+                with contextlib.suppress(RuntimeError, ConnectionError):
+                    await websocket.send_text(
+                        ConfigMessage(frame_interval_ms=interval).model_dump_json()
+                    )
 
     def new_frame_state(self, session_id: str) -> FrameState:
         base = self.interval_for(self.session_missions.get(session_id))

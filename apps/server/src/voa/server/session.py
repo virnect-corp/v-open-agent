@@ -4,8 +4,10 @@ All methods here are synchronous: the caller reads `now` and calls the engine
 without an await in between, so ticks and observations stay time-ordered.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Literal
 
 from voa.contracts.decision import RiskDecision
 from voa.contracts.messages import (
@@ -13,6 +15,7 @@ from voa.contracts.messages import (
     AlertMessage,
     DecisionMessage,
     NoticeMessage,
+    Presentation,
 )
 from voa.contracts.observation import HealthPayload, Observation, ObservationDraft
 from voa.engine.engine import DecisionEngine
@@ -28,6 +31,8 @@ def _utc_text(value: datetime | None) -> str | None:
 
 
 PushMessage = DecisionMessage | AlertMessage | AdmissionMessage | NoticeMessage
+# (kind, scenario_id, text) -> how the HUD shows it (SPEC 7.4); set by the server runtime
+Presenter = Callable[[Literal["alert", "notice"], str, str], Presentation]
 
 
 @dataclass
@@ -51,6 +56,12 @@ class SessionStream:
     alert_seq: int = 0
     last_alert_seq: int | None = None  # last value reported by `alert_sync`
     connected: bool = field(default=False)
+    presenter: Presenter | None = None
+
+    def _presentation(
+        self, kind: Literal["alert", "notice"], scenario_id: str, text: str
+    ) -> Presentation | None:
+        return self.presenter(kind, scenario_id, text) if self.presenter is not None else None
 
     @classmethod
     def start(
@@ -172,6 +183,7 @@ class SessionStream:
                 alert=record.alert,
                 risk_event_id=record.risk_event_id,
                 scenario_id=record.scenario_id,
+                presentation=self._presentation("alert", record.scenario_id, record.alert.text),
             )
             for record in sorted(resend, key=lambda r: r.alert_seq)
         ]
@@ -258,6 +270,9 @@ class SessionStream:
                         kind="degraded",
                         scenario_id=decision.scenario_id,
                         text=self.degraded_notice_text,
+                        presentation=self._presentation(
+                            "notice", decision.scenario_id, self.degraded_notice_text
+                        ),
                     )
                 )
             if decision.alert is not None:
@@ -272,6 +287,9 @@ class SessionStream:
                         alert=decision.alert,
                         risk_event_id=decision.risk_event_id,
                         scenario_id=decision.scenario_id,
+                        presentation=self._presentation(
+                            "alert", decision.scenario_id, decision.alert.text
+                        ),
                     )
                 )
         return messages

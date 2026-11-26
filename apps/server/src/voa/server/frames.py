@@ -134,7 +134,7 @@ def parse_headers(request: Request) -> FrameHeaders | None:
     return FrameHeaders(stream_id, seq, frame_id, capture, flags)
 
 
-def _jpeg_size(data: bytes) -> tuple[int, int] | None:
+def jpeg_size(data: bytes) -> tuple[int, int] | None:
     """Width and height from the first SOF marker, without decoding the image."""
     if not data.startswith(JPEG_MAGIC):
         return None
@@ -178,7 +178,7 @@ def register_frame_routes(app: FastAPI) -> None:
         headers = parse_headers(request)
         body = await request.body()
         content_type = request.headers.get("content-type", "").split(";")[0].strip()
-        size = _jpeg_size(body) if content_type == "image/jpeg" else None
+        size = jpeg_size(body) if content_type == "image/jpeg" else None
         too_big = len(body) > runtime.settings.frame_max_bytes
         if headers is None or size is None or too_big or max(size) > MAX_SIDE:
             counters.rejected += 1

@@ -87,6 +87,34 @@ class DecisionMessage(BaseModel):
     decision: RiskDecision
 
 
+class Flash(BaseModel):
+    model_config = MODEL_CONFIG
+    mode: Literal["none", "border", "full_screen"]
+    count: int = Field(ge=0, le=10)
+    on_ms: int = Field(ge=0, le=2000)
+    off_ms: int = Field(ge=0, le=2000)
+
+
+class HudStyle(BaseModel):
+    """How the HUD shows an alert or notice (SPEC 7.4, ADR-0009 decision 5)."""
+
+    model_config = MODEL_CONFIG
+    position: Literal["top_center", "center", "bottom_center"]
+    text_size: Literal["normal", "large"]
+    color: Literal["red", "yellow", "white"]
+    flash: Flash
+    show_ms: int = Field(ge=500, le=30000)
+    speech: bool
+    haptic: Literal["none", "pattern_a", "pattern_b"]
+
+
+class Presentation(HudStyle):
+    """The chosen style plus the approved text; devices reduce it to what they support."""
+
+    style_id: str = Field(min_length=1, max_length=64)
+    text: str = Field(min_length=1)
+
+
 class AlertMessage(BaseModel):
     model_config = MODEL_CONFIG
     type: Literal["alert"] = "alert"
@@ -94,6 +122,7 @@ class AlertMessage(BaseModel):
     alert: Alert
     risk_event_id: Id
     scenario_id: Id
+    presentation: Presentation | None = None  # server sessions always set it (TASK-44B)
 
 
 class NoticeMessage(BaseModel):
@@ -103,6 +132,7 @@ class NoticeMessage(BaseModel):
     kind: Literal["degraded"]
     scenario_id: Id
     text: str = Field(min_length=1)
+    presentation: Presentation | None = None
 
 
 class FrameCounters(BaseModel):

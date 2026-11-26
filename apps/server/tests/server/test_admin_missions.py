@@ -30,6 +30,10 @@ def client(workdir: Path) -> Iterator[TestClient]:  # noqa: F811
 
 
 def admin_token(client: TestClient) -> str:
+    login = {"username": "admin", "password": ADMIN_PASSWORD}
+    again = client.post("/v1/auth/login", json=login)  # already changed (a reopened server)
+    if again.status_code == 200:
+        return str(again.json()["token"])
     first = client.post("/v1/auth/login", json={"username": "admin", "password": "admin"}).json()
     client.post(
         "/v1/auth/password",
