@@ -541,17 +541,18 @@ devices:
     allowed_outputs: [hud, speaker]
 ```
 - `salt_hex`는 16바이트, `digest_hex`는 32바이트다. 검증값은 `hashlib.scrypt(secret.encode("utf-8"), salt=bytes.fromhex(salt_hex), n=2**14, r=8, p=1, dklen=32)`로 계산하고 `hmac.compare_digest`로 비교한다. 파라미터는 파일에서 바꾸지 않는다.
-- `POST /v1/sessions {device_id, secret, capabilities: {inputs: [...], outputs: [...]}}` → `{session_id, token, token_expires_at_utc, refresh_token, refresh_token_expires_at_utc, heartbeat_ms, watchdog_ms}`
+- `POST /v1/sessions {device_id, secret, capabilities: {inputs: [...], outputs: [...]}}` → `{session_id, token, token_expires_at_utc, refresh_token, refresh_token_expires_at_utc, heartbeat_ms, watchdog_ms, frame_interval_ms}` (`frame_interval_ms`는 §7.6, ADR-0009)
   - token과 refresh token은 각각 `secrets.token_urlsafe(32)`로 만든다. 서버는 각 token의 SHA-256 digest만 메모리에 보관하고 검증 시 `hmac.compare_digest`를 사용한다. 평문, secret, digest를 DB와 로그에 남기지 않는다.
   - access token TTL은 `VOA_TOKEN_TTL_S`, refresh token TTL은 `VOA_REFRESH_TOKEN_TTL_S`다. access token은 WebSocket handshake 시점에 검증하며 이미 인증된 WebSocket은 token 만료로 즉시 종료하지 않는다.
   - `POST /v1/sessions/{session_id}/refresh {refresh_token}`은 세션이 서버 메모리에 있고 refresh token이 유효할 때 `{token, token_expires_at_utc, refresh_token, refresh_token_expires_at_utc}`를 반환한다. 성공 시 이전 token 둘을 즉시 폐기하는 일회성 회전이고, 새 refresh token의 만료 시각은 이 시점부터 다시 계산한다(ADR-0005).
-  - REST `refresh`(token 회전)와 WebSocket `alert_sync(last_alert_seq)`(놓친 경고 동기화)는 다른 동작이다. 재접속 순서는 `refresh` → WebSocket `auth` → `alert_sync`이다(ADR-0006).
+  - REST `refresh`(token 회전)와 WebSocket `alert_sync(last_alert_seq)`(놓친 경고 동기화)는 다른 동작이다. 재접속 순서는 `refresh` → WebSocket 핸드셰이크 인증(§7.2) → `alert_sync`이다(ADR-0006, ADR-0009).
   - 서버 프로세스가 재시작하면 token과 세션 엔진을 복원하지 않는다. refresh 요청은 401이고 클라이언트는 장치 credential로 새 세션을 만든다.
   - 인증에 실패하면 401이고, 응답 본문에 원인을 구분하지 않는다.
   - 인증은 통과했지만 `capabilities`가 등록된 `allowed_*`를 벗어나면 400 `capability_not_allowed`다.
   - `outputs`가 비어 있으면 400 `no_output_capability`다. 경고를 출력할 수 없는 장치에는 세션을 열지 않는다.
-  - **세션 정리 (ADR-0005)**: WebSocket 연결이 없고 refresh token이 만료된 세션은 정리한다. tick 루프를 멈추고 엔진과 token digest를 메모리에서 지우며 `sessions.ended_at_utc`를 기록한다. 정리된 세션의 refresh와 WebSocket `auth`는 401/4401이다. 연결 중인 세션은 refresh token이 만료돼도 연결이 끝날 때까지 유지하고, 연결이 끊긴 뒤 다음 정리 검사에서 정리한다. 정리 검사는 `VOA_SESSION_SWEEP_INTERVAL_S`마다 한다.
+  - **세션 정리 (ADR-0005)**: WebSocket 연결이 없고 refresh token이 만료된 세션은 정리한다. tick 루프를 멈추고 엔진과 token digest를 메모리에서 지우며 `sessions.ended_at_utc`를 기록한다. 정리된 세션의 refresh와 WebSocket 핸드셰이크는 401이다. 연결 중인 세션은 refresh token이 만료돼도 연결이 끝날 때까지 유지하고, 연결이 끊긴 뒤 다음 정리 검사에서 정리한다. 정리 검사는 `VOA_SESSION_SWEEP_INTERVAL_S`마다 한다.
   - `required_streams`가 `inputs`에 없는 시나리오는 그 세션 동안 계속 `unknown`이다. 이를 위해 서버는 세션을 시작할 때, 선언되지 않은 각 stream에 대해 `health(status="down", detail_code="not_declared")` 관측을 엔진에 먼저 넣는다. 엔진 API는 추가하지 않는다.
+- **TLS (ADR-0009)**: `VOA_BIND`가 `127.0.0.1`이 아니면 `VOA_TLS_CERT`, `VOA_TLS_KEY`가 필수이고 모든 REST는 https, WebSocket은 wss다. 없으면 서버는 시작하지 않는다.
 - `VOA_ALLOW_INSECURE_DEV=true`는 bind 주소가 `127.0.0.1`일 때만 허용한다. 이때 장치 `dev_fixture`는 secret 없이 세션을 만들 수 있다.
 - `POST /v1/sessions`와 refresh endpoint를 제외한 세션 범위 REST API는 `Authorization: Bearer <access token>`을 요구한다. token은 URL, query, 로그에 넣지 않는다. 해당 token의 session과 path의 session이 다르면 404 `not_found`로 응답한다.
 - REST 오류 본문은 `{"code": "<stable_code>"}`다. 인증 실패는 원인과 관계없이 401 `{"code":"unauthorized"}`, capability 범위 위반은 400 `capability_not_allowed`, 빈 outputs는 400 `no_output_capability`다. 요청 원문과 secret은 응답에 넣지 않는다.
@@ -560,13 +561,20 @@ devices:
 
 ### 7.2 WS `/v1/streams/{session_id}` 메시지 (`voa.contracts.messages`)
 
+**연결과 인증 (ADR-0009)**: WebSocket은 핸드셰이크(HTTP upgrade) 단계에서 access token으로 인증한다. 인증에 실패하면 WebSocket을 열지 않고 HTTP 401로 거절한다(연결 후 `auth` 메시지 방식은 폐지).
+- 헤더를 붙일 수 있는 클라이언트(글래스 앱): `Authorization: Bearer <access token>`
+- 브라우저: `Sec-WebSocket-Protocol: voa.v1, voa.bearer.<access token>`. 서버는 선택한 subprotocol로 `voa.v1`만 되돌려 준다.
+- token의 session과 path의 `session_id`가 다르면 401이다. token은 URL과 query에 넣지 않는다.
+- 연결이 열리면 서버가 먼저 `auth_ok`를 보낸다. 클라이언트는 그다음 `alert_sync`를 보낸다.
+
+**프레임은 이 WebSocket으로 보내지 않는다.** 이미지는 §7.6 HTTP 업로드로 보낸다. 이 연결은 경고, ACK, heartbeat처럼 작은 제어 메시지 전용이라, 큰 프레임 때문에 경고가 늦어지지 않는다.
+
 모든 메시지는 `{"type": ..., ...}` JSON 텍스트 프레임이다.
 모든 message 모델은 `extra="forbid"`, `frozen=True`이고 `type`을 discriminator로 사용한다. 예를 들어 observation은 `{"type":"observation","observation":{...ObservationDraft...}}`, decision은 `{"type":"decision","decision":{...RiskDecision...}}`처럼 payload를 명시된 키 아래에 둔다.
 
 | 방향 | type | 필드 |
 |---|---|---|
-| C→S | `auth` | `token` (반드시 첫 메시지. 5초 안에 오지 않거나 실패하면 close 4401) |
-| C→S | `alert_sync` | `last_alert_seq` (auth 다음에만 허용. 이 번호 이후 alert 중 §7.3 조건을 만족하는 것만 다시 받는다. token 회전은 §7.1 REST `refresh`) |
+| C→S | `alert_sync` | `last_alert_seq` (연결 후 처음 한 번. 이 번호 이후 alert 중 §7.3 조건을 만족하는 것만 다시 받는다. token 회전은 §7.1 REST `refresh`) |
 | C→S | `observation` | ObservationDraft (서버가 `observation_id`, `server_received_*`, `received_at_utc`를 채운다) |
 | C→S | `ack` | `alert_id`, `status: received\|played` |
 | S→C | `auth_ok` | `session_id`, `server_time_utc` |
@@ -574,17 +582,20 @@ devices:
 | S→C | `decision` | `decision`: RiskDecision 전체 (상태 표시용) |
 | S→C | `alert` | `alert_seq`(세션 내 1부터 증가), Alert, `risk_event_id`, `scenario_id` |
 | S→C | `notice` | `notice_id`, `kind: degraded`, `scenario_id`, `text` (§7.4 판단 불가 고지) |
-| S→C | `heartbeat` | `server_time_utc`, `states: {scenario_id: RiskState}` (`VOA_HEARTBEAT_MS`마다) |
+| S→C | `heartbeat` | `server_time_utc`, `states: {scenario_id: RiskState}`, `frames: {received, processed, skipped, rejected}` (`VOA_HEARTBEAT_MS`마다) |
+| S→C | `config` | `frame_interval_ms` (관리자가 바꾸면 진행 중인 세션에 즉시 보냄. 전송 속도 설정이며 판단 규칙이 아님) |
+| S→C | `frame_result` | §7.6 업로드 응답과 같은 본문. 업로드가 `202 accepted`였던 프레임의 결과 |
 | S→C | `error` | `code`, `message` (원문 입력을 되돌려 보내지 않음) |
 
 - `alert_sync.last_alert_seq`는 0 이상이다. 아직 alert를 받지 않은 클라이언트(처음 연결)는 0을 보낸다.
 - 알 수 없는 type은 `error(code="unsupported_message_type")`, 알려진 type의 schema 오류는 `error(code="rejected_schema")`를 보내고 무시한다.
 - 세션에서 선언하지 않은 `stream_id`의 `observation`(health 포함)은 `error(code="stream_not_declared")`를 보내고 무시한다. 그렇지 않으면 미선언 센서에 health `ok`를 보내 주입된 `not_declared` down 상태를 풀 수 있다(DEV-01, T-R17).
 - `error.message`는 code마다 고정된 문구이고 클라이언트 입력을 담지 않는다.
-- auth 전 다른 메시지, 두 번째 auth, auth 전 alert_sync는 protocol 위반이며 `error(code="protocol_error")` 후 close 4401이다.
+- `alert_sync`를 두 번 보내면 protocol 위반이며 `error(code="protocol_error")`를 보내고 무시한다. 폐지된 `auth` 메시지는 `unsupported_message_type`이다.
 - JSON 텍스트가 아닌 WebSocket frame은 MVP에서 `unsupported_message_type`으로 무시한다.
 
-**예약 메시지 (MVP 미구현, Stage C/D에서 이 표를 확정)**: C→S `frame`(카메라 이미지), `audio_chunk`(PCM), `imu`(센서 배치), `ptt_start`/`ptt_end`(버튼). MVP 서버는 이 메시지가 오면 `error: unsupported_message_type`을 반환하고 무시한다.
+**예약 메시지 (미구현, 해당 Stage에서 이 표를 확정)**: C→S `audio_chunk`(PCM), `imu`(센서 배치), `ptt_start`/`ptt_end`(버튼). 서버는 이 메시지가 오면 `error: unsupported_message_type`을 반환하고 무시한다. 카메라 이미지는 WebSocket 메시지가 아니라 §7.6 HTTP 업로드다(ADR-0009).
+- S→C `analysis` (Stage E 예약, ADR-0009): `analysis_id`, `risk_event_id`, `scenario_id`, `claims[{text, evidence_ids}]`, `reviewers[]`, `status`. 확정된 결정만 입력으로 받는 분석기(VLM, 여러 서브에이전트 검토와 종합)의 결과를 끝나는 대로 보낸다. 경고를 만들거나 막거나 바꾸지 않고, claim은 §6 validator를 통과한 것만 보낸다.
 
 ### 7.3 전달 / ACK / 재접속
 - **alert 전달 상태**: 생성 시 `queued` → WS로 보내면 `sent` → ACK를 받으면 `received` 또는 `played`(played는 received를 포함한다).
@@ -613,7 +624,7 @@ OutputCap = Literal["hud", "speaker", "haptic"]
 | 입력 | 장치가 보내는 것 | 서버 쪽 처리 | 단계 |
 |---|---|---|---|
 | `camera_0` | MVP: 프레임마다 `observation`(Draft: detection/track. 시뮬레이터의 mock이 생성) | 그대로 엔진에 투입 | MVP-1 |
-| `camera_0` | 실기기: `frame`(JPEG, 긴 변 ≤ 640px, `frame_id`/`capture_ts` 포함) | 서버 Provider(detector/tracker)가 Draft 생성. 이미지는 메모리 TTL 동안만 보관 | Stage C |
+| `camera_0` | 프레임 업로드(§7.6, JPEG, 긴 변 ≤ 640px, `frame_id`/`capture_ts` 포함, `frame_interval_ms` 간격, 진행 중 1개) | 서버 Provider(배치된 모델)가 Draft 생성 후 엔진 `step`. 이미지는 처리 중에만 메모리에 두고 저장하지 않음 | Stage C2 (ADR-0009) |
 | `imu_0` | `imu` 배치 | tracker가 카메라 움직임 보정에 사용하고, 실패하면 `camera_motion_uncompensated` flag | Stage C |
 | `mic_0` | `audio_chunk` (PCM16, 16kHz, mono) | SED/ASR Provider | Stage D |
 | `ptt_0` | `ptt_start` / `ptt_end` | 이 구간의 `mic_0` 오디오만 사용자 명령 ASR로 처리 | Stage D |
@@ -627,7 +638,7 @@ OutputCap = Literal["hud", "speaker", "haptic"]
 | `speaker` | 장치 내장 TTS로 `text`를 읽음. TTS가 없으면 고정 경고음 | `text`를 1회 읽음 |
 | `haptic` | 진동 패턴 A (장치 정의) | 진동 패턴 B |
 
-- Stage C0(ADR-0007)에서는 예외로 시뮬레이터가 로컬 프레임 폴더를 읽어 장치 쪽에서 detector Provider를 실행하고 기존 `observation` 메시지로 보낸다. 서버 Provider와 `frame` 메시지는 Stage C1 이후에 확정한다.
+- Stage C0(ADR-0007)에서는 예외로 시뮬레이터가 로컬 프레임 폴더를 읽어 장치 쪽에서 detector Provider를 실행하고 기존 `observation` 메시지로 보낸다. 이 경로는 오프라인 평가와 회귀 테스트용으로 남는다. 제품 경로는 §7.6 프레임 업로드와 서버 추론이다(ADR-0009).
 
 - **TTS는 장치에서 한다.** 서버는 텍스트만 보내고 오디오는 생성하지 않는다(서버 TTS는 MVP 범위 밖).
 - **ACK 정의**
@@ -647,7 +658,7 @@ OutputCap = Literal["hud", "speaker", "haptic"]
 - 재접속에 성공하면 `alert_sync`를 보내고, 첫 heartbeat를 받으면 "연결 복구" 상태를 표시한다(음성 없음).
 
 ### 7.5 Backpressure / Health
-- 세션 입력 큐는 `asyncio.Queue(maxsize=VOA_INPUT_QUEUE_MAX)`다. 큐에는 `observation` 중 detection/track과 후속 단계의 `frame`만 넣는다. `auth`, `alert_sync`, `ack`, health 관측은 제어 경로에서 즉시 처리하고 큐 포화로 버리지 않는다.
+- 세션 입력 큐는 `asyncio.Queue(maxsize=VOA_INPUT_QUEUE_MAX)`다. 큐에는 `observation` 중 detection/track만 넣는다. 프레임 업로드는 §7.6의 stream당 처리 중 1개 규칙을 따른다. `alert_sync`, `ack`, health 관측은 제어 경로에서 즉시 처리하고 큐 포화로 버리지 않는다.
 - 큐가 가득 차면 같은 큐의 가장 오래된 영상 항목을 버리고 `dropped_frames += 1`과 해당 `stream_id`의 `drop_pending=true`를 기록한다. 버릴 영상 항목이 없으면 새로 들어온 영상 항목을 거부하고 동일하게 계수한다. 다음에 수락된 같은 stream의 detection/track 관측에만 `frame_dropped` flag를 붙이고 `drop_pending`을 지운다. health와 다른 stream에는 이 flag를 붙이지 않는다.
 - 큐에 넣는 시각이 관측의 `server_received_mono_ns`다. 큐에서 기다린 시간도 관측 나이에 포함되므로, 너무 늦게 처리된 관측은 Admission에서 `stale_on_arrival`이 된다. `frame_dropped` flag는 큐에 들어갈 때 붙인다.
 - `status.streams`는 세션에서 선언한 입력 stream 목록이고, `last_received_age_ms`는 그 stream의 마지막 WebSocket 수신(영상과 health 모두) 기준이다.
@@ -686,6 +697,66 @@ OutputCap = Literal["hud", "speaker", "haptic"]
 
 ---
 
+### 7.6 프레임 업로드 (ADR-0009)
+
+`POST /v1/sessions/{session_id}/frames` — 장치(글래스, 시뮬 페이지)가 카메라 프레임을 올리면 서버가 추론하고 판정한다.
+
+- 인증: `Authorization: Bearer <access token>`(§7.1 세션 범위 규칙)
+- 본문: JPEG 바이트(`Content-Type: image/jpeg`). 긴 변 640px 이하, `VOA_FRAME_MAX_BYTES` 이하
+- 헤더: `X-VOA-Stream-Id`(세션에서 선언한 입력), `X-VOA-Seq`(stream마다 0부터 증가), `X-VOA-Frame-Id`, `X-VOA-Capture-Ts-Ns`(장치 monotonic ns)
+- 처리:
+  1. 검증
+  2. 활성 profile의 시나리오가 요구하는 배치 모델마다 같은 `frame_id`로 `object_detection` Draft 생성(ADR-0004 키)
+  3. Gateway가 Observation으로 만들어 엔진 `step`
+  4. 결과 응답
+  - 프레임 바이트와 디코딩 이미지는 처리가 끝나면 버린다. DB, 파일, 로그에 남기지 않는다. `observations_meta`에는 지금처럼 메타데이터만 남긴다.
+- stream마다 처리 중인 프레임은 1개다. 처리 중에 온 요청은 즉시 `409 frame_busy`로 버리고 `skipped`로 센다. 클라이언트는 진행 중인 요청을 1개로 제한하고, 응답을 받은 뒤 그 시점의 최신 프레임을 보낸다. 간격은 `frame_interval_ms`보다 짧게 하지 않는다.
+- `VOA_FRAME_SYNC_TIMEOUT_MS` 안에 끝나면 `200`이고 아래 본문을 돌려준다. 넘으면 `202 {"frame_id", "status": "accepted"}`로 먼저 답하고, 끝나면 같은 본문을 제어 WebSocket `frame_result`로 보낸다.
+```json
+{"frame_id": "f_000123", "seq": 123, "status": "processed",
+ "results": [{"model_id": "rtdetr-r18-dfire", "observation_id": "obs_...",
+              "detections": [{"label": "fire", "score": 0.08, "bbox": [0.41, 0.32, 0.55, 0.61]}]}],
+ "states": {"fire_in_view": "candidate"},
+ "timing": {"capture_ts_monotonic_ns": 1234567890,
+            "received_at_utc": "...", "processing_started_at_utc": "...", "completed_at_utc": "...",
+            "queue_ms": 1, "provider_ms": 312, "engine_us": 55}}
+```
+- `bbox`는 정규화 꼭짓점 좌표(§3.3)다. `capture_ts_monotonic_ns`는 장치 값을 그대로 돌려준다. 장치 시각과 서버 시각은 서로 빼지 않는다(ADR-0001). `observation_id`는 경고 결정의 `evidence_ids`와 같은 ID라, 장치는 어느 프레임이 경고의 근거인지 연결할 수 있다.
+- 오류(본문 `{"code"}`, 입력을 되돌려주지 않음):
+
+| 상태 | code | 원인 |
+|---|---|---|
+| 400 | `frame_rejected` | 헤더 누락, JPEG 아님, 크기나 해상도 초과 |
+| 400 | `stream_not_declared` | 세션에서 선언하지 않은 stream |
+| 400 | `out_of_order` | seq나 촬영 시각 역행(엔진 admission과 같은 규칙) |
+| 401 | `unauthorized` | token 없음, 무효, 다른 세션 |
+| 409 | `frame_busy` | 같은 stream의 프레임 처리 중 |
+| 503 | `no_model_deployed` | 활성 profile이 요구하는 모델이 배치되지 않음 |
+
+### 7.7 관리자 API (ADR-0009)
+
+관리자 API는 장치 token과 분리된 관리자 token으로 보호한다(`Authorization: Bearer <admin token>`, 검증은 `VOA_ADMIN_TOKEN_FILE`의 scrypt digest와 비교). 기본은 `127.0.0.1`에서만 받고, 그 외 bind에서는 TLS가 필수다(§7.1). 관리자 token이 설정되지 않으면 관리자 API는 모두 503 `admin_disabled`다.
+
+| 메서드와 경로 | 동작 |
+|---|---|
+| `GET /v1/admin/models` | manifest 목록과 상태: 가중치(`missing`/`sha256_mismatch`/`ready`), 배치(`deployed`, `device`, `score_floor`) |
+| `POST /v1/admin/deployments` `{model_id, device: "cpu"\|"cuda", score_floor}` | sha256을 확인하고 모델을 메모리에 올린다. 다운로드하지 않는다. 여러 모델을 동시에 배치할 수 있다 |
+| `DELETE /v1/admin/deployments/{model_id}` | 해제. 활성 profile이 요구하면 409 `model_in_use` |
+| `GET /v1/admin/profile` | 활성 profile(§4.9 스키마)과 `profile_version` |
+| `POST /v1/admin/profile:validate` | 저장하지 않고 검증만 한다 |
+| `PUT /v1/admin/profile` | 검증 후 `profile_version`을 올려 `VOA_ACTIVE_CONFIG_DIR`에 저장한다. **새로 시작하는 세션부터 적용**한다. 진행 중인 세션은 시작할 때의 profile로 끝까지 판단한다 |
+| `GET /v1/admin/settings`, `PUT /v1/admin/settings` `{frame_interval_ms}` | 전송 설정. 범위는 100~5000이다. 진행 중인 세션에도 `config` 메시지로 즉시 알린다 |
+| `POST /v1/admin/detect?model_id=` (본문 JPEG 1장) | 엔진을 거치지 않고 탐지 결과만 돌려준다. 이미지는 저장하지 않는다 |
+| `GET /v1/admin/changes` | 변경 기록(§8.1 `admin_changes`) |
+
+- profile 검증 순서:
+  1. 스키마(§4.9)
+  2. manifest 대조(`check_profile_models`)
+  3. 요구 모델이 모두 배치됨
+  - 실패하면 400 `profile_invalid`, `profile_model_mismatch`, `model_not_deployed` 중 하나를 돌려주고 활성 설정은 바뀌지 않는다.
+- 배치 하한 점수: 실제 Provider 하한은 `min(배치 score_floor, 그 모델을 근거로 쓰는 시나리오의 min_score)`이다. 그래야 profile이 받아들일 근거를 Provider가 먼저 버리지 않는다.
+- 모든 변경(배치, 해제, profile, settings)은 `admin_changes`에 기록한다. 요청 원문과 token은 남기지 않는다.
+
 ## 8. 저장 / 보안 / 설정
 
 ### 8.1 SQLite (`voa.storage`) 테이블 — 이 목록 외의 테이블/컬럼 금지, BLOB 금지
@@ -693,13 +764,14 @@ OutputCap = Literal["hud", "speaker", "haptic"]
 - `observations_meta(observation_id PK, session_id, stream_id, source_kind, seq, admission_status, received_at_utc, quality_flags_json, model_id NULL, model_revision NULL)` — payload는 저장하지 않는다
 - `decisions(id INTEGER PK, session_id, risk_event_id, scenario_id, previous_state NULL, state, reason_codes_json, evidence_ids_json, policy_version, decided_at_utc)`
 - `alerts(alert_id PK, session_id, risk_event_id, scenario_id, alert_seq, delivery_state, valid_until_utc, updated_at_utc)`
-- **보존 기간 정리**: 서버를 시작할 때와 그 뒤 1시간마다, 테이블별 기준 컬럼(`sessions.started_at_utc`, `observations_meta.received_at_utc`, `decisions.decided_at_utc`, `alerts.updated_at_utc`)이 `now - VOA_METADATA_RETENTION_DAYS`보다 이전인 행을 삭제한다.
+- `admin_changes(id INTEGER PK, changed_at_utc, action, target, from_version NULL, to_version NULL, result_code)` — 관리자 변경 기록(ADR-0009). 요청 원문과 token은 저장하지 않는다
+- **보존 기간 정리**: 서버를 시작할 때와 그 뒤 1시간마다, 테이블별 기준 컬럼(`sessions.started_at_utc`, `observations_meta.received_at_utc`, `decisions.decided_at_utc`, `alerts.updated_at_utc`)이 `now - VOA_METADATA_RETENTION_DAYS`보다 이전인 행을 삭제한다. `admin_changes`는 운영 기록이라 이 정리 대상이 아니다.
 - 쓰기는 `voa.storage`만 한다. 엔진은 저장소를 모르고, 서버가 엔진 결과를 받아 기록한다.
 
 ### 8.2 로그
 - `logging`으로 JSON 한 줄씩 기록한다.
 - 허용 키: `event, session_id, device_id, stream_id, seq, observation_id, scenario_id, state, reason_codes, alert_id, status, latency_us, error_code`
-- 이 목록에 없는 키는 포맷터가 버린다. 토큰, secret, payload, text 필드는 구조적으로 로그에 남을 수 없다.
+- 이 목록에 없는 키는 포맷터가 버린다. 토큰, secret, payload, text 필드는 구조적으로 로그에 남을 수 없다. 프레임 본문, WebSocket 핸드셰이크 헤더(`Authorization`, `Sec-WebSocket-Protocol`), 관리자 token도 마찬가지다(ADR-0009).
 - `python -m voa.server`는 uvicorn에 `voa.server.logconfig.server_log_config()`를 넘긴다. 서버 로거(`uvicorn`, `uvicorn.error`, `uvicorn.access`, `websockets`, `voa`)는 모두 이 포맷터로 stderr에 쓰고, 자유 문구, 인자, traceback은 출력하지 않는다. `event`가 없는 기록은 logger 이름을 `event`로 쓴다. access log는 끈다.
 - 앱 시작 시 위 로거의 수준을 INFO 이상으로 올린다(낮추지는 않음). uvicorn은 WebSocket 프레임 원문을 `uvicorn.error` DEBUG로 남기므로, uvicorn을 `--log-level debug`로 직접 실행해도 프레임 덤프가 나오지 않게 한다(DAT-02).
 
@@ -709,7 +781,7 @@ VOA_PROFILE=dev-mock                 # dev-mock | pilot
 VOA_BIND=127.0.0.1
 VOA_PORT=8765
 VOA_ALLOW_INSECURE_DEV=true          # pilot 에서는 false 강제
-VOA_TLS_CERT=                        # pilot 에서 필수 (cert/key 없으면 시작 거부)
+VOA_TLS_CERT=                        # pilot, 또는 VOA_BIND 가 127.0.0.1 이 아니면 필수 (없으면 시작 거부, ADR-0009)
 VOA_TLS_KEY=
 VOA_POLICY_PROFILE=config/profiles/indoor_research_v0.yaml
 VOA_MODELS_DIR=config/models            # 모델 manifest 폴더 (ADR-0004)
@@ -727,15 +799,20 @@ VOA_METADATA_RETENTION_DAYS=7
 VOA_RAW_MEDIA_STORAGE=false          # MVP 에서는 true 로 설정하면 시작 거부 (저장 경로 미구현)
 VOA_EXTERNAL_NETWORK=false
 VOA_MODEL_AUTO_DOWNLOAD=false
+VOA_FRAME_MAX_BYTES=500000           # 프레임 업로드 최대 크기 (§7.6)
+VOA_FRAME_INTERVAL_MS=333            # 세션 응답의 frame_interval_ms 기본값. 관리자가 100~5000 으로 변경
+VOA_FRAME_SYNC_TIMEOUT_MS=1000       # 이 안에 끝나면 200, 넘으면 202 + frame_result
+VOA_ADMIN_TOKEN_FILE=                # 관리자 token scrypt digest 파일. 비면 관리자 API 503 admin_disabled
+VOA_ACTIVE_CONFIG_DIR=var/config     # 관리자가 적용한 profile 과 settings (버전별 YAML)
 ```
 
 상대 경로 설정은 서버 작업 디렉터리 `apps/server`를 기준으로 해석한다. 따라서 기본 `config/profiles/...`와 `config/devices.yaml`은 저장소 기준 `apps/server/config/...`를 가리킨다.
 
-숫자 설정은 `TICK_INTERVAL_MS > 0`, `HEARTBEAT_MS > 0`, `CLIENT_WATCHDOG_MS >= 2 × HEARTBEAT_MS`, `TOKEN_TTL_S > 0`, `REFRESH_TOKEN_TTL_S >= TOKEN_TTL_S`, `SESSION_SWEEP_INTERVAL_S > 0`, `INPUT_QUEUE_MAX >= 1`, `METADATA_RETENTION_DAYS >= 1`을 만족해야 한다. 위반하면 서버는 시작하지 않는다.
+숫자 설정은 `FRAME_MAX_BYTES > 0`, `100 <= FRAME_INTERVAL_MS <= 5000`, `FRAME_SYNC_TIMEOUT_MS > 0`, `TICK_INTERVAL_MS > 0`, `HEARTBEAT_MS > 0`, `CLIENT_WATCHDOG_MS >= 2 × HEARTBEAT_MS`, `TOKEN_TTL_S > 0`, `REFRESH_TOKEN_TTL_S >= TOKEN_TTL_S`, `SESSION_SWEEP_INTERVAL_S > 0`, `INPUT_QUEUE_MAX >= 1`, `METADATA_RETENTION_DAYS >= 1`을 만족해야 한다. 위반하면 서버는 시작하지 않는다.
 
 어떤 모델을 쓸지는 `VOA_POLICY_PROFILE`(시나리오의 `required_models`)과 `VOA_MODELS_DIR`(manifest)이 정한다. `weights: file` 모델의 가중치는 `VOA_MODEL_WEIGHTS_DIR/<model_id>/` 아래에 사용자가 미리 받아 둔 파일만 읽고, 로드 전에 manifest의 `sha256`과 대조한다. 서버는 가중치를 다운로드하지 않는다(`VOA_MODEL_AUTO_DOWNLOAD=false`). manifest 대조가 실패하면 서버는 시작하되 `readyz` 503을 반환하고 엔진은 `ProfileError`로 만든다(INV-10).
 
-`python -m voa.server`는 운영 진입점이다. `VOA_BIND`, `VOA_PORT`로 uvicorn을 시작하고 `VOA_PROFILE=pilot`이면 검증된 `VOA_TLS_CERT`, `VOA_TLS_KEY`를 uvicorn SSL 인자로 넘긴다. `server.app:app`을 import하는 것만으로 서버를 시작하지 않는다.
+`python -m voa.server`는 운영 진입점이다. `VOA_BIND`, `VOA_PORT`로 uvicorn을 시작하고 `VOA_PROFILE=pilot`이거나 `VOA_BIND`가 `127.0.0.1`이 아니면 검증된 `VOA_TLS_CERT`, `VOA_TLS_KEY`를 uvicorn SSL 인자로 넘긴다. `server.app:app`을 import하는 것만으로 서버를 시작하지 않는다.
 
 ### 8.4 Docker 실행 규약
 

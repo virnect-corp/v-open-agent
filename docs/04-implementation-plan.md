@@ -115,13 +115,27 @@ TASK-15 검증 (2026-11-10): 네트워크 차단 Docker 개발 컨테이너에�
 |---|---|---|---|---|---|---|
 | TASK-33 | C1a open-vocabulary Provider와 화재 profile | INP-05, ENG-19 | `apps/server/src/voa/providers/omdet.py`(OmDet-Turbo, 프롬프트 = manifest `labels`), `apps/server/config/models/omdet-turbo-fire.yaml`(labels `[fire, smoke]`, `weights: file`), `apps/server/config/profiles/fire_c1.yaml`(시나리오 `fire_in_view`), 시뮬레이터와 평가 러너 `--model` 선택 (§9, ADR-0008) | 가짜 모델로 label 필터, bbox 정규화, Draft 스키마, `model` 출처. `fire_in_view`: 화염 연속 → 경고 1회, 사라짐 → 해제, 연기 단독 → 경고 없음. `@pytest.mark.model`: sha256 대조 후 추론 1회 | 32 | DONE |
 | TASK-34 | 이벤트 정답 기반 평가 | NFR-02, T-R14, T-R20 | `python -m voa.eval --labels FILE`(구간 정답 JSONL: 시작, 끝 초), `event_recall`, `false_alerts_per_hour`, 첫 경고까지의 지연 | 정답 구간 안 경고 = 적중, 밖 = 오경고, 정답 없음 → `TBD` 유지, 겹치거나 역순 구간 → 오류, 결정론 | 30 | TODO |
-| TASK-35 | 시뮬레이터 웹 페이지: 웹캠과 영상 업로드 | INP-01, COM-02 | ADR-0007 보강(브라우저 입력), 로컬 전용 웹 페이지(웹캠 실시간, 영상 파일 업로드 → 프레임 → Provider → 기존 `observation`), HUD 경고와 음성 출력, ACK, 상태와 지연 표시 | 프레임과 업로드 영상은 메모리에서만 처리하고 디스크, DB, 로그에 남지 않음(프라이버시 누출 검사 확장), `127.0.0.1` 전용, 추론이 늦으면 프레임 건너뜀, 가짜 Provider E2E | 31, 33 | TODO |
+| TASK-35 | 시뮬레이터 웹 페이지: 웹캠과 영상 업로드 | INP-01, COM-02 | ADR-0007 보강(브라우저 입력), 로컬 전용 웹 페이지(웹캠 실시간, 영상 파일 업로드 → 프레임 → Provider → 기존 `observation`), HUD 경고와 음성 출력, ACK, 상태와 지연 표시 | 프레임과 업로드 영상은 메모리에서만 처리하고 디스크, DB, 로그에 남지 않음(프라이버시 누출 검사 확장), `127.0.0.1` 전용, 추론이 늦으면 프레임 건너뜀, 가짜 Provider E2E | 31, 33 | SUPERSEDED (ADR-0009: 장치 쪽 추론 대신 서버 추론. 화면은 TASK-44) |
 | TASK-36 | C1a 실영상 검증 | NFR-02, NFR-03, T-R20 | 공개 화재 영상, 소형 화염(촛불, 라이터), 오경고 유발 장면(조명, 석양, 반사, 주황색 조끼, 모니터)의 프레임 폴더 평가, ADR-0008 결과 절 | 장면별 경고 수와 오경고 원인 기록, Provider p50/p95, 정답 구간이 있으면 recall과 FP/hour | 33, 34 | TODO (촛불 공개 영상 1건 측정 완료, ADR-0008 결과 절. 정답 구간 평가는 TASK-34 후) |
 | TASK-37 | D-Fire 데이터 준비 도구 | NFR-04 | 사용자가 받은 D-Fire(YOLO 형식) → `python -m voa.train.dfire`: 학습/검증/평가 분할 JSONL(정규화 꼭짓점 bbox, 객체 없는 이미지는 음성 샘플로 유지), `PublicDataset` 접두 이미지 기본 제외, 데이터 기록(제외 수, 분할 해시, 인용) | 합성 YOLO 라벨 폴더로 기본 제외와 옵션 포함, 분할 결정론, 잘못된 라벨 줄 건너뛰고 계수, 원본 폴더 변경 0건 | 32 | DONE |
 | TASK-38 | RT-DETR R18 D-Fire 미세조정 | INP-05, OQ-11 | `python -m voa.train.finetune`(RT-DETR R18, AMP, val 클래스별 box P/R/F1과 fire 이미지 단위 recall/오검출률, `best/` `last/` `train_record.json`, head bias 사전확률 초기화, 점수 기준 sweep, 학습 후 test 평가, `--negatives`, `epochs.jsonl`), Docker `train-cuda` target과 `scripts/train.sh`(GPU PC에서 빌드), 선택 그룹 `train`(scipy, §9.1) | 맥 CPU 스모크(몇 step, 손실 감소와 산출 파일 형식), GPU 1회 학습은 사용자 환경에서 실행 | 37, OQ-04 | DONE |
 | TASK-39 | C1b 미세조정 모델 평가와 비교 | NFR-02, NFR-03, OQ-06 | manifest `rtdetr-r18-dfire`(`redistribution_allowed: false`), D-Fire 평가 분할과 TASK-36 영상으로 C1a와 비교, `fire_c1` 임계값 제안 | 같은 프레임 폴더와 정답으로 두 모델 보고서, 임계값 변경은 측정 근거와 함께 기록 | 36, 38 | DONE (정답 구간 비교는 TASK-34 후) |
 
 **Stage C1 완료 기준**: 화재 영상(공개 영상과 소형 화염)과 오경고 유발 장면에 대해 `fire_in_view`의 경고, 해제, 오경고 수와 지연이 보고서로 남고, 경고 경로에 쓸 모델과 임계값이 측정 근거와 함께 정해진다.
+
+### 4.3 Stage C2 — 서버 추론, 관리자 설정, 웹 화면 (ADR-0009)
+
+목적은 장치가 프레임만 올리고 서버가 추론과 판정을 하는 제품 경로를 만드는 것이다. 모델 배치와 임계값은 관리자 API로 정하고, 관리자 페이지와 시뮬 페이지는 공개 API만 쓴다. 시뮬 페이지가 쓰는 API는 스마트 글래스 앱과 같다.
+
+| Task | 제목 | REQ | 산출물 (SPEC 절) | 수용 테스트 | 선행 | 상태 |
+|---|---|---|---|---|---|---|
+| TASK-40 | WebSocket 핸드셰이크 인증과 TLS 규칙 | COM-01, DAT-02 | `voa.server.ws`(`Authorization` 헤더 또는 `Sec-WebSocket-Protocol: voa.v1, voa.bearer.<token>`, 실패 시 HTTP 401, `auth` 메시지 폐지), settings TLS 규칙(루프백이 아니면 필수), `GlassClient` 핸드셰이크 인증, 기존 테스트 이전 (§7.1, §7.2) | 헤더와 subprotocol 각각 성공, token 없음, 무효, 다른 세션, 정리된 세션은 401, 응답 subprotocol은 `voa.v1`만, 폐지된 `auth` 메시지는 `unsupported_message_type`, 핸드셰이크 헤더가 로그에 없음, 루프백이 아닌 bind에 TLS가 없으면 시작 거부, 재접속 순서(refresh → 핸드셰이크 → alert_sync) 유지 | 39 | TODO |
+| TASK-41 | 프레임 업로드 API와 서버 추론 파이프라인 | INP-01, INP-03, ENG-19, DAT-01 | `POST /v1/sessions/{id}/frames`, 서버 Provider 실행(워커 스레드, 모델 공유), 같은 `frame_id`의 다중 모델 관측, 응답 `results`/`states`/`timing`, `202` + `frame_result`, `409 frame_busy`, heartbeat `frames` 계수, 세션 응답 `frame_interval_ms` (§7.6) | 가짜 모델로 프레임 → 관측 → 결정 → alert, 오류 표의 각 code, 처리 중 중복은 409이고 대기열 없음, 동기 한도 초과 시 202와 `frame_result`, 업로드 중에도 제어 WS의 alert가 늦어지지 않음, 모델 2개가 같은 `frame_id` 공유, `timing` 필드와 `capture_ts` 반환, 프레임 바이트가 디스크, DB, 로그에 없음(프라이버시 검사 확장) | 40 | TODO |
+| TASK-42 | 모델 배치 런타임과 관리자 API | INP-05, ENG-15, ENG-19 | `/v1/admin/*`(models, deployments, profile validate/put, settings, detect, changes), 관리자 token(`VOA_ADMIN_TOKEN_FILE`), `VOA_ACTIVE_CONFIG_DIR` 버전 저장, `admin_changes` 테이블, `config` 메시지, 배치 하한을 profile `min_score`에 맞춤 (§7.7, §8.1) | 관리자 token 없음, 무효는 401이고 설정이 없으면 503, 가중치 없음, sha256 불일치 배치 거부, 다중 배치, 사용 중 모델 해제 409, 미배치 모델을 요구하는 profile 거부, 검증 실패 시 활성 설정 유지, 버전 증가, 진행 중 세션은 이전 profile 유지하고 새 세션은 새 profile, `frame_interval_ms` 변경 시 진행 중 세션에 `config`, 변경 기록에 원문과 token 없음 | 41 | TODO |
+| TASK-43 | 관리자 페이지 `/ui/admin` | INP-05, ENG-15 | 서버가 제공하는 정적 페이지(API만 호출): 모델과 배치, 시나리오와 임계값 편집(검증 후 적용), 프레임 간격, 이미지 한 장 시험, 변경 기록 | API 가짜 응답으로 화면 상태 전환, 관리자 token이 URL과 저장소에 남지 않음, 검증 실패 문구 표시 | 42 | TODO |
+| TASK-44 | 시뮬 페이지 `/ui/sim` | INP-01, COM-02, DEV-02 | 장치 역할 정적 페이지: 세션 생성, wss 핸드셰이크 인증, 웹캠 또는 동영상 캡처 → 프레임 업로드(진행 중 1개, `frame_interval_ms`), 응답 박스 그리기, HUD와 TTS, 표시 후 `played` ACK, 상태와 `timing` 표시. TASK-35 초안의 화면 요소 재사용 | 같은 API를 쓰는 테스트 클라이언트로 영상 프레임 → 경고 → `played`, 동영상 파일이 업로드되지 않음, `config` 수신 시 간격 변경, 서버 끊김 시 내장 문구 | 41, 42 | TODO |
+
+**Stage C2 완료 기준**: 시뮬 페이지에서 동영상이나 웹캠으로 올린 프레임에 대해, 관리자 페이지에서 배치한 모델과 임계값으로 서버가 판정하고, 박스, 경고, ACK, 구간별 지연이 화면과 기록에 남는다. 프레임은 어디에도 저장되지 않는다.
 
 평가 보고 형식(Stage C~): `run_id, code_commit, profile, model_artifacts{id,revision,sha256}, hardware, dataset, metrics{event_recall, false_alerts_per_hour, e2e_p95_ms, unknown_rate, unsupported_claim_rate}, limitations`. 측정하지 않은 값은 `TBD`로 둔다.
 

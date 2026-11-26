@@ -1,6 +1,6 @@
 # ADR-0009: 서버 쪽 추론, 프레임 전송 방식, 관리자 설정 API
 
-- Status: proposed
+- Status: accepted (2026-11-26, 소유자 결정 반영)
 - Date: 2026-11-26
 - Owners: Contract, Server, Provider/Replay, Engine(profile), Android
 - Related: INP-01, INP-03, INP-05, COM-02, ENG-15, ENG-19, DAT-01, DAT-02, NFR-03, ADR-0004, ADR-0007, ADR-0008, SPEC §4.9, §7.2, §7.4, §8.1, §8.2, §9
@@ -50,10 +50,22 @@
   - 인증은 `Authorization: Bearer <access token>`이다.
   - 서버는 추론하고 엔진 `step`까지 마친 뒤 응답한다.
     ```json
-    {"frame_id": "...", "status": "processed",
-     "results": [{"model_id": "...", "detections": [{"label": "...", "score": 0.1, "bbox": [x1, y1, x2, y2]}]}],
-     "states": {"fire_in_view": "candidate"}, "provider_ms": 312}
+    {"frame_id": "...", "seq": 12, "status": "processed",
+     "results": [{"model_id": "...", "observation_id": "obs_...",
+                  "detections": [{"label": "...", "score": 0.1, "bbox": [x1, y1, x2, y2]}]}],
+     "states": {"fire_in_view": "candidate"},
+     "timing": {"capture_ts_monotonic_ns": 1234567890,
+                "received_at_utc": "2026-11-26T10:00:00.120Z",
+                "processing_started_at_utc": "2026-11-26T10:00:00.121Z",
+                "completed_at_utc": "2026-11-26T10:00:00.436Z",
+                "queue_ms": 1, "provider_ms": 312, "engine_us": 55}}
     ```
+  - **타임스탬프 (소유자 요청)**: 응답과 `frame_result`에 `timing`을 담는다.
+    - `capture_ts_monotonic_ns`: 장치가 보낸 값을 그대로 돌려준다. 장치는 이 값으로 자기 시계 기준 왕복 지연(촬영 → 결과 수신)을 잰다.
+    - `received_at_utc`, `processing_started_at_utc`, `completed_at_utc`: 서버 시계(UTC)
+    - `queue_ms`, `provider_ms`, `engine_us`: 서버 구간별 소요 시간
+    - 서버와 장치의 시계는 맞춰져 있지 않을 수 있다. 그래서 장치 시각과 서버 시각을 빼서 쓰지 않고, 각자 자기 시계 안에서만 차이를 계산한다(ADR-0001).
+    - 이 값으로 PLAN §4의 `e2e_p95_ms`를 측정한다. 응답의 `observation_id`가 경고 결정의 `evidence_ids`에 들어가므로, 장치는 어느 프레임이 경고의 근거인지 연결해 "촬영 → 경고 표시" 지연도 잴 수 있다.
   - 서버가 이미 그 세션의 다른 프레임을 처리 중이면 즉시 **`409 frame_busy`**를 돌려주고 버린다. 오래된 프레임을 쌓지 않는다.
   - 클라이언트는 **진행 중인 요청을 1개로 제한**한다. 응답을 받은 뒤 그 시점의 최신 프레임을 보내므로, 처리 속도에 맞춰 fps가 자동으로 조절된다. 상한은 서버가 주는 `frame_interval_ms`다.
   - 오류 응답은 다음과 같다. 모두 원문 입력을 되돌려주지 않는다.
@@ -72,6 +84,36 @@
   - 측정 결과 Wi-Fi 대역폭이 JPEG 업로드로 부족할 때
   - 10fps 이상이 필요한 시나리오가 생길 때
 - RTSP/RTMP 푸시는 채택하지 않는다. 미디어 서버가 추가되고 녹화 기능 때문에 원본 저장 금지를 관리하기 어렵다.
+
+### 동기 응답과 비동기 결과 (소유자 결정, 2026-11-26)
+
+추론 시간이 길어질 수 있고, 나중에 여러 서브에이전트가 검토해 종합 의견을 내는 구조로 확장한다. 그래서 결과를 두 층으로 나눈다.
+
+- **fast path (경고 경로)**: 탐지 → 엔진 판정 → 경고. AGENTS 규칙 9에 따라 VLM, 에이전트, OCR, STT를 기다리지 않는다.
+  - 업로드 응답은 `VOA_FRAME_SYNC_TIMEOUT_MS`(기본 1000) 안에 탐지와 엔진 `step`이 끝나면 `200 processed`로 결과를 담는다.
+  - 넘으면 `202 accepted {frame_id}`로 먼저 답한다. 결과는 끝나는 대로 제어 WebSocket의 **`frame_result`** 메시지(업로드 응답과 같은 본문)로 보낸다.
+  - 처리 중 프레임은 stream당 1개 규칙(409)은 그대로다.
+- **slow path (분석 경로, 후속)**: 확정된 결정과 그 근거만 입력으로 받는 분석기(VLM, 여러 서브에이전트의 검토와 종합)가 끝나는 대로 제어 WebSocket의 **`analysis`** 메시지로 보낸다.
+  - 필드: `analysis_id`, `risk_event_id`, `scenario_id`, `claims[{text, evidence_ids}]`, `reviewers[]`, `status`
+  - 이 메시지는 경고를 만들거나, 막거나, 바꾸지 않는다. 판단은 `DecisionEngine`만 한다(AGENTS 규칙 2).
+  - claim은 §6 validator를 통과한 것만 보낸다(EXP-03, T-R09).
+  - 메시지 이름과 필드는 SPEC에 예약만 하고, 구현은 Stage E에서 한다.
+
+### 프레임 간격 조정 (소유자 결정)
+
+- 관리자가 `frame_interval_ms`(기본 333, 범위 100~5000)를 바꾼다. 장치에는 두 경로로 알린다.
+  - 세션 생성 응답에 포함한다.
+  - 진행 중인 세션에는 제어 WebSocket의 **`config`** 메시지(`frame_interval_ms`)로 바로 보낸다.
+- 이것은 전송 속도 설정일 뿐이고 판단 규칙(profile)이 아니다. 그래서 진행 중인 세션에도 즉시 적용한다. 판단 규칙은 결정 3대로 새 세션부터 적용한다.
+
+### 연결 보안과 인증 (소유자 결정)
+
+- `VOA_BIND`가 `127.0.0.1`이 아니면 **TLS(https/wss)가 필수**다. 인증서와 키가 없으면 서버가 시작을 거부한다. 지금까지는 `VOA_PROFILE=pilot`에서만 필수였다.
+- **WebSocket은 핸드셰이크(HTTP upgrade) 단계에서 인증한다.** 인증에 실패하면 WebSocket을 열지 않고 HTTP 401로 거절한다. 지금의 "연결 후 첫 메시지 `auth`(5초 안, close 4401)" 방식은 이것으로 대체한다(SPEC §7.2 갱신).
+  - 글래스 앱처럼 헤더를 붙일 수 있는 클라이언트: `Authorization: Bearer <access token>`
+  - 브라우저(WebSocket API가 헤더를 못 붙임): `Sec-WebSocket-Protocol: voa.v1, voa.bearer.<access token>`. 서버는 `voa.v1`만 되돌려 준다.
+  - token은 URL과 query에 넣지 않는다. 핸드셰이크 헤더는 로그에 남기지 않는다(SPEC §8.2).
+- 프레임 업로드와 관리자 API는 요청마다 `Authorization: Bearer`를 쓴다. 관리자 token은 장치 token과 분리한다(결정 3).
 
 ## 핵심 결정 2: 서버 쪽 추론 파이프라인
 
@@ -113,12 +155,14 @@
 - 시뮬 페이지가 쓰는 API는 실제 스마트 글래스 앱이 쓰는 것과 **완전히 같다.** 그래서 시뮬 페이지가 동작하면 글래스 연동 계약도 검증된다.
 - TASK-35 초안(장치 쪽 추론 브리지 `voa.simulator.web`)은 병합하지 않는다. 화면 요소(캡처, HUD, TTS, 박스 그리기)와 `GlassClient`의 `defer_played`는 재사용한다.
 
-## 결정이 더 필요한 것 (SPEC 반영 전에 확인)
+## 결정 기록 (2026-11-26)
 
-1. **`frame_interval_ms` 기본값**: 제안 333 ms(3fps). 관리자 설정으로 바꾸고, 세션 생성 응답에 넣어 장치에 알린다.
-2. **profile 변경 적용 시점**: 제안은 "새 세션부터"다. "진행 중 세션도 즉시 적용"을 원하면, 적용된 시나리오를 `unknown`으로 리셋하는 규칙과 reason_code 추가(예: `policy_changed`)가 필요하다.
-3. **관리자 인증 방식**: 제안은 파일 기반 단일 관리자 token이다. 계정과 권한 관리가 필요하면 범위가 커진다.
-4. **업로드 응답의 탐지 결과 범위**: 제안은 박스와 점수만 담는 것이다. 엔진이 근거로 채택했는지(ROI 안인지, `min_score` 이상인지)까지 표시하려면 필드를 더해야 한다.
+1. 전송 방식: HTTP 업로드(응답에 결과) + 제어 WebSocket 분리로 확정. 추론이 길어지면 `202`와 `frame_result`로 비동기 처리한다.
+2. `frame_interval_ms`: 기본 333, 관리자가 조정하고 진행 중인 세션에도 `config`로 즉시 알린다.
+3. profile 변경은 새 세션부터 적용한다.
+4. 인증: 루프백이 아니면 TLS 필수, WebSocket은 핸드셰이크에서 인증, 관리자는 별도 token(파일 기반 단일 token).
+5. 나중에 여러 서브에이전트가 검토해 종합 의견을 내는 구조로 확장한다. 결과는 `analysis`로 비동기 전달하고 경고 경로와 분리한다.
+6. 업로드 응답과 `frame_result`에 요청 타임스탬프와 구간별 소요 시간(`timing`)을 담는다.
 
 ## Alternatives
 
