@@ -228,10 +228,36 @@ STOPPED
 - 수용: UC-01~05, UC-08, UC-09 통과
 - 프라이버시: E2E 후 Logcat, app storage, 서버 로그에 secret, token, raw media, payload text가 없음
 
+### AND-06A: Stage C2 서버 계약 반영 (ADR-0009, ADR-0010, ADR-0011) — 필수
+
+서버 쪽 추론, 미션, 계정 도입으로 Android 참조 클라이언트의 접속 방식이 바뀐다. 서버 Task(TASK-40~46)와 **같은 계약으로 맞춰 개발해야** 한다(소유자 지시, 2026-11-26). 시뮬 페이지(`/ui/sim`)와 Android 앱은 같은 API를 쓰므로, 시뮬 페이지가 통과한 시나리오를 Android 계측 테스트로 그대로 다시 확인한다.
+
+- 선행: TASK-40(핸드셰이크 인증), TASK-40A(계정), TASK-41(미션), TASK-42(프레임 업로드), TASK-43(정원), TASK-44(`presentation`), AND-06
+- 변경점:
+
+| 항목 | 지금 (AND-02~04) | 바꿀 계약 | SPEC |
+|---|---|---|---|
+| 로그인 | 장치 `device_id`, secret | 착용자 계정: 가입 화면, 로그인(`username`, `password`), 승인 대기(403 `account_pending`), 시도 제한(429) 안내. 장치 credential은 무인 장치용으로 유지 | §7.1, ADR-0011 |
+| WebSocket 인증 | 연결 후 첫 메시지 `auth` | **핸드셰이크에서 `Authorization: Bearer`**(OkHttp 헤더), 실패는 HTTP 401. 루프백이 아니면 wss만 허용 | §7.1, §7.2, ADR-0009 |
+| 미션 | 없음 | 로그인 후 **초기 화면에서 `GET /v1/missions` 목록과 선택**(`PUT /v1/sessions/{id}/mission`), `mission` 메시지, 미션 전환 | §7.1, §7.2, ADR-0010 |
+| 프레임 전송 | `observation`(합성) | **`auth_ok`와 미션 확정 후에만** 카메라 프레임을 JPEG(긴 변 640px 이하)로 `POST /v1/sessions/{id}/frames`, 진행 중 1개, `frame_interval_ms`와 `config` 반영, 끊기면 중지 | §7.2, §7.6 |
+| 품질 플래그 | 없음 | IMU 회전 속도가 기준을 넘으면 `X-VOA-Quality-Flags: camera_motion_uncompensated` | §7.6, ADR-0010 |
+| 결과 | 없음 | 업로드 응답과 `frame_result`의 `states`, `timing`(왕복 지연 기록). 박스는 HUD에 그리지 않음 | §7.4, §7.6 |
+| HUD | 고정 렌더링 | `alert`/`notice`의 **`presentation` 규칙표대로**(문구, 위치, 색, 전체 화면 또는 테두리 깜빡임, 유지 시간, 음성, 진동), `capabilities.hud` 선언과 축소 규칙, **상태 표시줄**(정원 초과 > 연결 끊김 > 서버 오류 > 응답 지연 > 경고 > 판단 불가 > 확인 중 > 정상) | §7.4, ADR-0009 결정 5 |
+| 정원 초과 | 없음 | 세션 생성 503 `capacity_exceeded`와 `Retry-After`, 제어 WS `error(capacity_exceeded)` 후 close 4503 → "정원 초과" 표시와 내장 문구 1회, `retry_after_s` 뒤 재시도 | §7.1, §7.2, ADR-0010 |
+
+- 산출물: `protocol` 모듈 계약 갱신(인증, 미션, `frame_result`, `config`, `mission`, `presentation`, 정원 초과), `session` 모듈 로그인과 가입 화면, 미션 선택 화면, `input-media` 프레임 업로더, `output` HUD 렌더러와 상태 표시줄
+- 수용:
+  - 계약 테스트(`contracts/schemas` 스냅샷)
+  - 가짜 서버로 로그인 → 미션 선택 → 연결 후 업로드 → 경고 → `played`
+  - 연결 전 업로드 0건, 정원 초과 안내, `presentation` 축소 규칙과 상태 표시줄 우선순위 단위 테스트
+  - 프레임과 비밀번호가 로그, 파일, 캐시에 남지 않음
+  - 시뮬 페이지와 같은 시나리오를 계측 테스트로 재현
+
 ### AND-07: Stage C camera/IMU 어댑터
 
-- 선행: Stage C 메시지 계약 확정, AND-06
-- 산출물: camera frame source, IMU batch source, memory-only bounded queue
+- 선행: AND-06A(프레임 업로드 계약, ADR-0009), AND-06
+- 산출물: camera frame source(JPEG 스냅샷, `frame_interval_ms`), IMU 회전 속도 → `camera_motion_uncompensated` 플래그, memory-only, 진행 중 1개
 - 수용: 세션 종료 후 프레임 참조 0건, cache 파일 0건, provider OFF 시 AND-06 통과
 
 ### AND-08: Stage D microphone/PTT 어댑터
