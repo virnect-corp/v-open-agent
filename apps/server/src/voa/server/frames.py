@@ -165,7 +165,7 @@ def register_frame_routes(app: FastAPI) -> None:
         )
         if owner is None or owner != session_id:
             return _error(401, "unauthorized")
-        state = runtime.frame_states.setdefault(session_id, runtime.new_frame_state())
+        state = runtime.frame_states.setdefault(session_id, runtime.new_frame_state(session_id))
         counters = state.counters
         counters.received += 1
         stream = runtime.streams.get(session_id)

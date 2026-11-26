@@ -37,6 +37,7 @@ from voa.server.accounts import (
     SignupRequest,
     public_user,
 )
+from voa.server.admin import register_admin_routes
 from voa.server.auth import (
     ALL_INPUTS,
     ALL_OUTPUTS,
@@ -219,14 +220,32 @@ class ServerRuntime:
         )
         self.streams[session_id] = stream
         self.session_missions[session_id] = mission
+        if session_id in self.frame_states:  # a new mission brings its own frame interval
+            self.frame_states[session_id] = self.new_frame_state(session_id)
         self.tick_tasks[session_id] = asyncio.create_task(tick_loop(self, stream))
         self.input_tasks[session_id] = asyncio.create_task(input_loop(self, stream))
         self._warm_up(mission)
         return stream
 
-    def new_frame_state(self) -> FrameState:
-        base = self.settings.frame_interval_ms
+    def interval_for(self, mission: MissionVersion | None) -> int:
+        """The mission's recommended frame interval, else the server's (ADR-0010)."""
+        if mission is not None and mission.settings.frame_interval_ms is not None:
+            return mission.settings.frame_interval_ms
+        return self.settings.frame_interval_ms
+
+    def new_frame_state(self, session_id: str) -> FrameState:
+        base = self.interval_for(self.session_missions.get(session_id))
         return FrameState(base_interval_ms=base, interval_ms=base)
+
+    def current_default(self) -> MissionVersion | None:
+        """The default mission's latest published version (an admin may have published since)."""
+        if self.default_mission is None or self.missions is None:
+            return None
+        latest = self.missions.published(self.default_mission.info.mission_id)
+        return latest if isinstance(latest, MissionVersion) else None
+
+    def mission_users(self, mission_id: str) -> int:
+        return sum(1 for m in self.session_missions.values() if m.info.mission_id == mission_id)
 
     def capacity_body(self) -> dict[str, object]:
         return {
@@ -253,7 +272,10 @@ class ServerRuntime:
         if mission is None:
             return None
         return MissionMessage(
-            mission_id=mission.info.mission_id, version=mission.version, name=mission.info.name
+            mission_id=mission.info.mission_id,
+            version=mission.version,
+            name=mission.info.name,
+            frame_interval_ms=self.interval_for(mission),
         )
 
     def _stop_stream(self, session_id: str) -> None:
@@ -356,11 +378,14 @@ def _error(status_code: int, code: str) -> JSONResponse:
     return JSONResponse({"code": code}, status_code=status_code)
 
 
-def _mission_ref(mission: MissionVersion | None) -> MissionRef | None:
+def _mission_ref(runtime: "ServerRuntime", mission: MissionVersion | None) -> MissionRef | None:
     if mission is None:
         return None
     return MissionRef(
-        mission_id=mission.info.mission_id, version=mission.version, name=mission.info.name
+        mission_id=mission.info.mission_id,
+        version=mission.version,
+        name=mission.info.name,
+        frame_interval_ms=runtime.interval_for(mission),
     )
 
 
@@ -468,7 +493,7 @@ def create_app(
         if not caps.outputs:
             return _error(400, "no_output_capability")
 
-        mission = runtime.default_mission
+        mission = runtime.current_default()
         if body.mission_id is not None:
             chosen = runtime.missions.published(body.mission_id) if runtime.missions else None
             if not isinstance(chosen, MissionVersion):
@@ -495,8 +520,8 @@ def create_app(
                 **_token_pair(runtime, tokens),
                 "heartbeat_ms": runtime.settings.heartbeat_ms,
                 "watchdog_ms": runtime.settings.client_watchdog_ms,
-                "frame_interval_ms": runtime.settings.frame_interval_ms,
-                "mission": _mission_ref(mission),
+                "frame_interval_ms": runtime.interval_for(mission),
+                "mission": _mission_ref(runtime, mission),
             }
         )
         return JSONResponse(created.model_dump(mode="json"))
@@ -565,6 +590,7 @@ def create_app(
                     "models": sorted(
                         {m for s in profile.scenarios for m in s.required_models.values()}
                     ),
+                    "frame_interval_ms": runtime.interval_for(version),
                 }
             )
         return JSONResponse({"missions": found})
@@ -591,7 +617,7 @@ def create_app(
         if websocket is not None and message is not None:
             with contextlib.suppress(RuntimeError):
                 await websocket.send_text(message.model_dump_json())
-        ref = _mission_ref(mission)
+        ref = _mission_ref(runtime, mission)
         assert ref is not None
         return JSONResponse(ref.model_dump(mode="json"))
 
@@ -722,6 +748,7 @@ def create_app(
 
     register_stream_routes(app)
     register_frame_routes(app)
+    register_admin_routes(app)
     return app
 
 

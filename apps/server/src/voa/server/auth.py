@@ -81,6 +81,7 @@ class MissionRef(BaseModel):
     mission_id: Id
     version: int
     name: str
+    frame_interval_ms: int
 
 
 class SessionCreated(TokenPair):

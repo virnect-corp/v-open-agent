@@ -167,6 +167,7 @@ class MissionMessage(BaseModel):
     mission_id: Id
     version: int = Field(ge=1)
     name: str
+    frame_interval_ms: int = Field(ge=100, le=5000)  # the mission's, else the server's
 
 
 class ErrorMessage(BaseModel):

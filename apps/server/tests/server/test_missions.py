@@ -134,6 +134,7 @@ def test_default_mission_is_the_policy_profile_and_decisions_carry_its_version(
         "mission_id": "indoor_research_v0",
         "version": 1,
         "name": "indoor_research_v0",
+        "frame_interval_ms": 333,
     }
     with connect(client, created) as ws:
         next_of(ws, "auth_ok")
@@ -185,7 +186,12 @@ def test_switching_restarts_every_scenario_from_unknown(api: tuple[TestClient, F
             json={"mission_id": "fire_c1"},
             headers=bearer(created),
         )
-        assert switched.json() == {"mission_id": "fire_c1", "version": 1, "name": "fire_c1"}
+        assert switched.json() == {
+            "mission_id": "fire_c1",
+            "version": 1,
+            "name": "fire_c1",
+            "frame_interval_ms": 333,
+        }
         assert next_of(ws, "mission")["mission_id"] == "fire_c1"
         beat = next_of(ws, "heartbeat")
     assert beat["states"] == {"fire_in_view": "unknown"}

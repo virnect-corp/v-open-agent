@@ -104,6 +104,7 @@ def test_create_session_issues_tokens_and_records_session(workdir: Path) -> None
         "mission_id": "indoor_research_v0",
         "version": 1,
         "name": "indoor_research_v0",
+        "frame_interval_ms": 333,
     }
     assert data["session_id"].startswith("sess_")
     assert data["token"] != data["refresh_token"]

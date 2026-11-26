@@ -50,6 +50,9 @@ def test_schema_has_only_spec_tables_columns_and_no_blobs(tmp_path: Path) -> Non
                 "user_id username display_name role status password_salt_hex "
                 "password_digest_hex password_change_required created_at_utc updated_at_utc"
             ),
+            "admin_changes": (  # ADR-0009: outcome only, no request body or token
+                "id changed_at_utc action target from_version to_version result_code"
+            ),
         }
         tables = connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         assert {row[0] for row in tables} == set(expected)
@@ -425,3 +428,20 @@ def test_context_manager_closes_connection_on_failure(tmp_path: Path) -> None:
         raise RuntimeError("synthetic failure")
     with pytest.raises(sqlite3.ProgrammingError, match="closed"):
         store.get_session("missing")
+
+
+def test_admin_changes_are_kept_by_retention(tmp_path: Path) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    with SQLiteStore(tmp_path / "m.sqlite3") as store:
+        old = datetime(2026, 1, 1, tzinfo=UTC)
+        store.record_admin_change(
+            changed_at_utc=old, action="mission_publish", target="fire_c1", result_code="ok"
+        )
+        store.purge_expired(now_utc=old + timedelta(days=365), retention_days=7)
+        [row] = store.list_admin_changes()
+    assert (row["action"], row["from_version"], row["to_version"]) == (
+        "mission_publish",
+        None,
+        None,
+    )
