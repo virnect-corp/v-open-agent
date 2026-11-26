@@ -1,4 +1,7 @@
-"""TASK-33 C1a open-vocabulary detector and fire profile (ADR-0008; INP-05, ENG-19).
+"""TASK-33 C1a open-vocabulary detector and the fire profile (ADR-0008; INP-05, ENG-19).
+
+TASK-39 moved the fire profile's evidence model to the C1b detector
+`rtdetr-r18-dfire` (min_score 0.05); the OmDet manifest stays for exploration.
 
 The detector family is chosen from the local config.json after the sha256 check;
 fake factories stand in for torch/transformers so this runs offline. The fire
@@ -25,6 +28,7 @@ from voa.simulator.frames import FrameSource
 SERVER = Path(__file__).resolve().parents[2]
 CONFIG = SERVER / "config"
 MODEL_ID = "omdet-turbo-fire"
+FIRE_MODEL = "rtdetr-r18-dfire"  # fire_c1 evidence model since TASK-39
 FIRE_BOX = (100.0, 80.0, 220.0, 260.0)
 SMOKE_BOX = (300.0, 0.0, 600.0, 200.0)
 
@@ -57,7 +61,8 @@ def test_fire_profile_matches_manifests_and_ignores_smoke() -> None:
     profile = fire_profile()
     [scenario] = profile.scenarios
     assert scenario.id == "fire_in_view" and scenario.labels == ["fire"]
-    assert scenario.required_models == {"object_detection": MODEL_ID}
+    assert scenario.required_models == {"object_detection": FIRE_MODEL}
+    assert profile.params.min_score == 0.05
     assert scenario.roi == (0.0, 0.0, 1.0, 1.0)
     assert scenario.severity == "attention"
     assert check_profile_models(profile, manifests()) is None
@@ -127,9 +132,9 @@ def test_loader_checks_sha256_before_reading_config(tmp_path: Path) -> None:
 
 def decode(data: bytes) -> list[RawDetection]:
     return {
-        b"fire": [RawDetection("fire", 0.55, FIRE_BOX)],
+        b"fire": [RawDetection("fire", 0.12, FIRE_BOX)],  # C1b scores stay low
         b"smoke": [RawDetection("smoke", 0.8, SMOKE_BOX)],
-        b"weak": [RawDetection("fire", 0.28, FIRE_BOX)],  # above provider floor, below min_score
+        b"weak": [RawDetection("fire", 0.03, FIRE_BOX)],  # above provider floor, below min_score
         b"empty": [],
     }[data]
 
@@ -142,7 +147,11 @@ def run(tmp_path: Path, contents: list[bytes], fps: float = 5) -> list[tuple[str
     from voa.providers.rtdetr import RtDetrProvider
 
     provider = RtDetrProvider(
-        FakeDetector(("fire", "smoke")), model_id=MODEL_ID, revision="r", labels=["fire", "smoke"]
+        FakeDetector(("fire", "smoke")),
+        model_id=FIRE_MODEL,
+        revision="r",
+        labels=["fire", "smoke"],
+        score_floor=0.01,
     )
     result = run_eval(FrameSource(folder, fps=fps, decode=decode), provider, fire_profile())
     return [(d.previous_state, d.state) for d in result.decisions]
@@ -179,7 +188,31 @@ def test_eval_cli_with_fire_profile_and_no_weights_exits_2(
         ]
     )  # fmt: skip
     err = capsys.readouterr().err
-    assert code == 2 and "omdet-turbo-fire" in err and str(tmp_path) not in err
+    assert code == 2 and FIRE_MODEL in err and str(tmp_path) not in err
+
+
+def test_eval_cli_lowers_the_provider_floor_to_the_profile_min_score(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 0.25 provider floor would drop every C1b fire box (scores ~0.05-0.1)."""
+    import voa.eval.__main__ as eval_cli
+
+    seen: list[float] = []
+
+    def fake_load(manifest: Any, root: Path, *, score_floor: float, **_: Any) -> Any:
+        seen.append(score_floor)
+        raise WeightsError("stop here")
+
+    monkeypatch.setattr(eval_cli, "load_detector", fake_load)
+    folder = tmp_path / "clip"
+    folder.mkdir()
+    (folder / "00000.jpg").write_bytes(b"fire")
+    args = ["--frames", str(folder), "--fps", "5"]
+    args += ["--profile", str(CONFIG / "profiles" / "fire_c1.yaml")]
+    assert eval_main(args) == 2 and seen == [0.05]
+    assert eval_main([*args, "--score-floor", "0.2"]) == 2 and seen == [0.05, 0.2]
+    c0 = ["--frames", str(folder), "--fps", "5"]  # C0 profile min_score 0.7 -> 0.25
+    assert eval_main(c0) == 2 and seen[-1] == 0.25
 
 
 # --- real weights (excluded by default) ---

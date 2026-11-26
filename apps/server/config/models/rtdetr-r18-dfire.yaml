@@ -1,0 +1,16 @@
+# Stage C1b fire detector (ADR-0008 Results, TASK-38). RT-DETR R18 COCO fine-tuned on
+# D-Fire (CC0 1.0, PublicDataset images excluded) for 1 epoch of a 2-epoch run on the
+# development laptop. Internal development weights: not in the repository and not
+# redistributed. Copy the training output `best/` into var/models/rtdetr-r18-dfire/;
+# model.safetensors is checked against sha256 before loading.
+model_id: rtdetr-r18-dfire
+revision: dfire-e2-best-2026-11-25
+kind: object_detection
+labels: [smoke, fire]
+weights: file
+sha256: ed2be0c81dc92f515001d9313570eeb20a867a27428720c232a3ae7257346acc
+license: Apache-2.0
+license_evidence_url: https://github.com/gaiasd/DFireDataset
+redistribution_allowed: false
+reviewed_at: 2026-11-26
+reviewer: voa-maintainers

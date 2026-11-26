@@ -11,7 +11,7 @@
 문서끼리 충돌하거나 명세에 없는 결정(라이브러리, 임계값, 필드)이 필요하면 **구현을 멈추고** 충돌 지점과 선택지를 제시한다.
 
 ## 2. 현재 상태
-- Stage A(TASK-01~15A), Stage A+(TASK-24~26), Stage B(TASK-16~23, 27, 28), Stage B 게이트(MVP-1), Stage C0(TASK-29~32, ADR-0007, 로컬 CPU 실모델 검증) 완료. 첫 실제 시나리오는 화재로 결정했고(ADR-0008, OQ-01, OQ-08), 다음은 Stage C1(PLAN §4.2, TASK-33부터)이다. 학습 GPU가 정해질 때까지 TASK-38은 대기다(OQ-04). 실행 환경은 Docker(§4)이고 진행 상황은 `docs/04-implementation-plan.md`의 상태 열이 기준이다.
+- Stage A(TASK-01~15A), Stage A+(TASK-24~26), Stage B(TASK-16~23, 27, 28), Stage B 게이트(MVP-1), Stage C0(TASK-29~32, ADR-0007, 로컬 CPU 실모델 검증) 완료. 첫 실제 시나리오는 화재(ADR-0008)이고 Stage C1의 TASK-33, 37, 38, 39가 끝났다: D-Fire로 학습한 `rtdetr-r18-dfire`(내부 개발용 가중치)로 화재 경고가 시뮬레이터 → 서버 → ACK 경로를 통과한다. 남은 C1 작업은 TASK-34(정답 구간 평가), 35(웹캠/영상 업로드 페이지), 36(실영상 검증)이다. 학습은 개발 노트북 RTX 3070에서 `scripts/train.sh`로 한다. 실행 환경은 Docker(§4)이고 진행 상황은 `docs/04-implementation-plan.md`의 상태 열이 기준이다.
 - 실제로 파일을 만들고 명령을 실행하기 전에는 "테스트가 통과한다"고 말하지 않는다.
 
 ## 3. 슬래시 명령
@@ -33,6 +33,8 @@
   scripts/vision.sh pytest -q -m model apps/server/tests/contracts/test_rtdetr_provider.py  # Stage C0 실모델 (ADR-0007)
   scripts/extract-frames.sh <video> <name> [fps]   # 영상 -> apps/server/var/frames/<name> (Docker ffmpeg)
   scripts/vision.sh python -m voa.eval --frames apps/server/var/frames/<name> --fps 5  # C0 평가 보고서
+  scripts/vision.sh python -m voa.eval --frames apps/server/var/frames/<name> --fps 3 --profile apps/server/config/profiles/fire_c1.yaml  # 화재(C1b)
+  # 시뮬레이터 화재: --model rtdetr-r18-dfire --score-floor 0.05 (Provider 하한이 profile min_score보다 높으면 근거가 버려짐)
   ```
 - `dev` 서비스는 `network_mode: none`이다. 테스트는 네트워크 없이 통과해야 한다.
 - 실모델 테스트는 `@pytest.mark.model`로 표시하고 기본 실행에서 제외한다.

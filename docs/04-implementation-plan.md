@@ -119,7 +119,7 @@ TASK-15 검증 (2026-11-10): 네트워크 차단 Docker 개발 컨테이너에�
 | TASK-36 | C1a 실영상 검증 | NFR-02, NFR-03, T-R20 | 공개 화재 영상, 소형 화염(촛불, 라이터), 오경고 유발 장면(조명, 석양, 반사, 주황색 조끼, 모니터)의 프레임 폴더 평가, ADR-0008 결과 절 | 장면별 경고 수와 오경고 원인 기록, Provider p50/p95, 정답 구간이 있으면 recall과 FP/hour | 33, 34 | TODO (촛불 공개 영상 1건 측정 완료, ADR-0008 결과 절. 정답 구간 평가는 TASK-34 후) |
 | TASK-37 | D-Fire 데이터 준비 도구 | NFR-04 | 사용자가 받은 D-Fire(YOLO 형식) → `python -m voa.train.dfire`: 학습/검증/평가 분할 JSONL(정규화 꼭짓점 bbox, 객체 없는 이미지는 음성 샘플로 유지), `PublicDataset` 접두 이미지 기본 제외, 데이터 기록(제외 수, 분할 해시, 인용) | 합성 YOLO 라벨 폴더로 기본 제외와 옵션 포함, 분할 결정론, 잘못된 라벨 줄 건너뛰고 계수, 원본 폴더 변경 0건 | 32 | DONE |
 | TASK-38 | RT-DETR R18 D-Fire 미세조정 | INP-05, OQ-11 | `python -m voa.train.finetune`(RT-DETR R18, AMP, val 클래스별 box P/R/F1과 fire 이미지 단위 recall/오검출률, `best/` `last/` `train_record.json`, head bias 사전확률 초기화, 점수 기준 sweep, 학습 후 test 평가, `--negatives`, `epochs.jsonl`), Docker `train-cuda` target과 `scripts/train.sh`(GPU PC에서 빌드), 선택 그룹 `train`(scipy, §9.1) | 맥 CPU 스모크(몇 step, 손실 감소와 산출 파일 형식), GPU 1회 학습은 사용자 환경에서 실행 | 37, OQ-04 | DONE |
-| TASK-39 | C1b 미세조정 모델 평가와 비교 | NFR-02, NFR-03, OQ-06 | manifest `rtdetr-r18-dfire`(`redistribution_allowed: false`), D-Fire 평가 분할과 TASK-36 영상으로 C1a와 비교, `fire_c1` 임계값 제안 | 같은 프레임 폴더와 정답으로 두 모델 보고서, 임계값 변경은 측정 근거와 함께 기록 | 36, 38 | TODO |
+| TASK-39 | C1b 미세조정 모델 평가와 비교 | NFR-02, NFR-03, OQ-06 | manifest `rtdetr-r18-dfire`(`redistribution_allowed: false`), D-Fire 평가 분할과 TASK-36 영상으로 C1a와 비교, `fire_c1` 임계값 제안 | 같은 프레임 폴더와 정답으로 두 모델 보고서, 임계값 변경은 측정 근거와 함께 기록 | 36, 38 | DONE (정답 구간 비교는 TASK-34 후) |
 
 **Stage C1 완료 기준**: 화재 영상(공개 영상과 소형 화염)과 오경고 유발 장면에 대해 `fire_in_view`의 경고, 해제, 오경고 수와 지연이 보고서로 남고, 경고 경로에 쓸 모델과 임계값이 측정 근거와 함께 정해진다.
 

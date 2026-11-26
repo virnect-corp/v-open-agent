@@ -58,6 +58,7 @@ def test_default_mock_manifests_load() -> None:
         "mock-tracker",
         "omdet-turbo-fire",
         "rtdetr-r18-coco",
+        "rtdetr-r18-dfire",
     ]
     detector, tracker = loaded["mock-detector"], loaded["mock-tracker"]
     assert (detector.kind, detector.labels, detector.weights) == (
