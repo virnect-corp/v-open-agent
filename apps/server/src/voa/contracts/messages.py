@@ -29,12 +29,6 @@ RESERVED_TYPES = frozenset({"frame", "audio_chunk", "imu", "ptt_start", "ptt_end
 # --- Client -> Server ---
 
 
-class AuthMessage(BaseModel):
-    model_config = MODEL_CONFIG
-    type: Literal["auth"]
-    token: str = Field(max_length=256)
-
-
 class AlertSyncMessage(BaseModel):
     model_config = MODEL_CONFIG
     type: Literal["alert_sync"]
@@ -55,9 +49,9 @@ class AckMessage(BaseModel):
 
 
 ClientMessage = Annotated[
-    AuthMessage | AlertSyncMessage | ObservationMessage | AckMessage, Field(discriminator="type")
+    AlertSyncMessage | ObservationMessage | AckMessage, Field(discriminator="type")
 ]
-CLIENT_TYPES = frozenset({"auth", "alert_sync", "observation", "ack"})
+CLIENT_TYPES = frozenset({"alert_sync", "observation", "ack"})  # `auth` retired: ADR-0009
 
 
 class ClientEnvelope(RootModel[ClientMessage]):

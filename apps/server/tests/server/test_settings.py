@@ -112,7 +112,7 @@ def test_unimplemented_network_switches_refuse_start(name: str) -> None:
 
 
 def test_insecure_dev_only_on_loopback() -> None:
-    assert load(BIND="0.0.0.0", ALLOW_INSECURE_DEV="false").bind == "0.0.0.0"
+    assert load(BIND="0.0.0.0", ALLOW_INSECURE_DEV="false", EXPOSURE="loopback").bind == "0.0.0.0"
     with pytest.raises(SettingsError) as error:
         load(BIND="0.0.0.0", ALLOW_INSECURE_DEV="true")
     assert "VOA_ALLOW_INSECURE_DEV" in error.value.fields
@@ -136,6 +136,27 @@ def test_pilot_requires_existing_cert_and_key(tmp_path: Path) -> None:
     key.write_text("key", encoding="utf-8")
     s = load(PROFILE="pilot", ALLOW_INSECURE_DEV="false", TLS_CERT=str(cert), TLS_KEY=str(key))
     assert (s.tls_cert, s.tls_key) == (cert, key)
+
+
+def test_network_exposure_requires_tls_and_loopback_declaration_does_not(tmp_path: Path) -> None:
+    """ADR-0009: TLS unless only the host loopback can reach the port (TASK-40)."""
+    assert load().exposure == "loopback" and not load().tls_required
+    with pytest.raises(SettingsError) as error:
+        load(BIND="0.0.0.0", ALLOW_INSECURE_DEV="false")  # inferred: network
+    assert {"VOA_TLS_CERT", "VOA_TLS_KEY"} <= set(error.value.fields)
+    compose = load(BIND="0.0.0.0", ALLOW_INSECURE_DEV="false", EXPOSURE="loopback")
+    assert compose.exposure == "loopback" and not compose.tls_required
+    with pytest.raises(SettingsError) as error:
+        load(EXPOSURE="network")  # loopback bind declared as exposed: still TLS
+    assert "VOA_TLS_CERT" in error.value.fields
+    with pytest.raises(SettingsError) as error:
+        load(EXPOSURE="public")
+    assert "VOA_EXPOSURE" in error.value.fields
+    cert, key = tmp_path / "c", tmp_path / "k"
+    cert.write_text("c", encoding="utf-8")
+    key.write_text("k", encoding="utf-8")
+    lan = load(BIND="0.0.0.0", ALLOW_INSECURE_DEV="false", TLS_CERT=str(cert), TLS_KEY=str(key))
+    assert lan.exposure == "network" and lan.tls_required
 
 
 def test_pilot_refuses_insecure_dev(tmp_path: Path) -> None:

@@ -221,8 +221,8 @@ def _observation(d: ObservationDraft) -> dict[str, Any]:
 def test_health_bypasses_a_saturated_video_queue(server: Any) -> None:
     client, mono, workdir = server
     session = _session(client)
-    with client.websocket_connect(f"/v1/streams/{session['session_id']}") as ws:
-        ws.send_json({"type": "auth", "token": session["token"]})
+    bearer = {"Authorization": f"Bearer {session['token']}"}
+    with client.websocket_connect(f"/v1/streams/{session['session_id']}", headers=bearer) as ws:
         assert ws.receive_json()["type"] == "auth_ok"
         for seq in range(1, 6):  # queue max 2: three drops, nothing consumed
             ws.send_json(_observation(draft(seq=seq)))

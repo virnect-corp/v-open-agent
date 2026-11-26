@@ -1,9 +1,12 @@
 """WebSocket `/v1/streams/{session_id}` and the per-session tick loop (SPEC 7.2, 7.4).
 
-The first message must be `auth` within AUTH_TIMEOUT_S; otherwise, or on a bad
-token, the socket closes with 4401. Engine time is read immediately before each
-engine call with no await in between, so ticks and observations never go back
-in time.
+Authentication happens in the handshake (ADR-0009): the access token comes in
+`Authorization: Bearer <token>` (native clients) or as the subprotocol
+`voa.bearer.<token>` next to `voa.v1` (browsers cannot set headers). A missing,
+invalid, expired, swept or foreign token is refused with HTTP 401 before the
+socket opens; only `voa.v1` is echoed back. The token never appears in a URL,
+a message or a log. Engine time is read immediately before each engine call
+with no await in between, so ticks and observations never go back in time.
 """
 
 import asyncio
@@ -13,6 +16,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI, WebSocket
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
@@ -21,7 +25,6 @@ from voa.contracts.messages import (
     AckMessage,
     AlertMessage,
     AlertSyncMessage,
-    AuthMessage,
     AuthOkMessage,
     ClientEnvelope,
     ClientMessage,
@@ -36,8 +39,9 @@ from voa.server.session import SessionStream
 if TYPE_CHECKING:
     from voa.server.app import ServerRuntime
 
-AUTH_TIMEOUT_S = 5.0
-CLOSE_UNAUTHORIZED = 4401
+CLOSE_UNAUTHORIZED = 4401  # server-side close of an authenticated socket (e.g. session swept)
+SUBPROTOCOL = "voa.v1"
+BEARER_PREFIX = "voa.bearer."
 
 
 def parse_client_message(event: Mapping[str, Any]) -> ClientMessage | ErrorCode:
@@ -115,36 +119,48 @@ async def _heartbeat_loop(
             await _send(websocket, beat)
 
 
-async def _authenticate(
-    runtime: "ServerRuntime", websocket: WebSocket, session_id: str
-) -> SessionStream | None:
+def handshake_credentials(headers: Mapping[str, str]) -> tuple[str | None, str | None]:
+    """(token, subprotocol to accept) from the upgrade request; (None, None) if absent.
+
+    `Authorization: Bearer` wins. The subprotocol form needs `voa.v1` beside exactly
+    one `voa.bearer.<token>`, so a browser always gets back the protocol it asked for.
+    """
+    offered = [p.strip() for p in headers.get("sec-websocket-protocol", "").split(",")]
+    offered = [p for p in offered if p]
+    accept = SUBPROTOCOL if SUBPROTOCOL in offered else None
+    scheme, _, value = headers.get("authorization", "").partition(" ")
+    if scheme.lower() == "bearer" and value.strip():
+        return value.strip(), accept
+    bearer = [p.removeprefix(BEARER_PREFIX) for p in offered if p.startswith(BEARER_PREFIX)]
+    if accept is not None and len(bearer) == 1 and bearer[0]:
+        return bearer[0], accept
+    return None, None
+
+
+async def _refuse(websocket: WebSocket) -> None:
+    """HTTP 401 before the socket opens; servers without the denial extension get a 403."""
     try:
-        event = await asyncio.wait_for(websocket.receive(), AUTH_TIMEOUT_S)
-    except TimeoutError:
-        return None
-    message = parse_client_message(event)
-    if isinstance(message, AuthMessage):
-        stream = runtime.streams.get(session_id)
-        if stream is not None and runtime.sessions.verify_access(
-            session_id, message.token, runtime.mono_ns()
-        ):
-            return stream
-        return None
-    if event.get("type") == "websocket.receive":
-        code: ErrorCode = "protocol_error" if not isinstance(message, str) else message
-        await _send(websocket, error_message(code))
-    return None
+        await websocket.send_denial_response(
+            JSONResponse({"code": "unauthorized"}, status_code=401)
+        )
+    except RuntimeError:
+        await websocket.close(code=1008)
 
 
 def register_stream_routes(app: FastAPI) -> None:
     @app.websocket("/v1/streams/{session_id}")
     async def stream_endpoint(websocket: WebSocket, session_id: str) -> None:
         runtime: ServerRuntime = websocket.app.state.runtime
-        await websocket.accept()
-        stream = await _authenticate(runtime, websocket, session_id)
-        if stream is None:
-            await websocket.close(code=CLOSE_UNAUTHORIZED)
+        token, subprotocol = handshake_credentials(websocket.headers)
+        stream = runtime.streams.get(session_id)
+        if (
+            token is None
+            or stream is None
+            or not runtime.sessions.verify_access(session_id, token, runtime.mono_ns())
+        ):
+            await _refuse(websocket)
             return
+        await websocket.accept(subprotocol=subprotocol)
 
         await _send(
             websocket,
@@ -168,6 +184,7 @@ def register_stream_routes(app: FastAPI) -> None:
 
 
 async def _serve(runtime: "ServerRuntime", stream: SessionStream, websocket: WebSocket) -> None:
+    synced = False
     while True:
         event = await websocket.receive()
         if event["type"] == "websocket.disconnect":
@@ -175,10 +192,11 @@ async def _serve(runtime: "ServerRuntime", stream: SessionStream, websocket: Web
         message = parse_client_message(event)
         if isinstance(message, str):
             await _send(websocket, error_message(message))
-        elif isinstance(message, AuthMessage):
-            await _send(websocket, error_message("protocol_error"))
-            return  # second auth: close 4401 in the caller
         elif isinstance(message, AlertSyncMessage):
+            if synced:  # once per connection (SPEC 7.2)
+                await _send(websocket, error_message("protocol_error"))
+                continue
+            synced = True
             resend = stream.alert_sync(message.last_alert_seq, runtime.mono_ns())
             await _push(runtime, stream, websocket, resend)
         elif isinstance(message, AckMessage):

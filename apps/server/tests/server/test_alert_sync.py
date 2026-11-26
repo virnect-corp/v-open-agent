@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from starlette.websockets import WebSocketDisconnect
+from starlette.testclient import WebSocketDenialResponse
 
 from voa.config.profile_loader import load_profile
 from voa.contracts.observation import Detection, DetectionPayload, ModelRef, ObservationDraft
@@ -186,8 +186,8 @@ def test_reconnect_refresh_auth_alert_sync_resends_the_same_alert(tmp_path: Path
             },
         ).json()
         sid = session["session_id"]
-        with client.websocket_connect(f"/v1/streams/{sid}") as ws:
-            ws.send_json({"type": "auth", "token": session["token"]})
+        bearer = {"Authorization": f"Bearer {session['token']}"}
+        with client.websocket_connect(f"/v1/streams/{sid}", headers=bearer) as ws:
             _next(ws, "auth_ok")
             for seq in range(1, 4):
                 mono.now += 100 * MS
@@ -201,8 +201,8 @@ def test_reconnect_refresh_auth_alert_sync_resends_the_same_alert(tmp_path: Path
             f"/v1/sessions/{sid}/refresh", json={"refresh_token": session["refresh_token"]}
         )
         assert reuse.status_code == 401  # the previous refresh token is gone
-        with client.websocket_connect(f"/v1/streams/{sid}") as ws:
-            ws.send_json({"type": "auth", "token": refreshed["token"]})
+        bearer = {"Authorization": f"Bearer {refreshed['token']}"}
+        with client.websocket_connect(f"/v1/streams/{sid}", headers=bearer) as ws:
             _next(ws, "auth_ok")
             ws.send_json({"type": "alert_sync", "last_alert_seq": 0})
             again = _next(ws, "alert")
@@ -212,23 +212,24 @@ def test_reconnect_refresh_auth_alert_sync_resends_the_same_alert(tmp_path: Path
     assert again["alert_seq"] == first["alert_seq"] == 1
 
 
-def test_alert_sync_before_auth_is_a_protocol_error(tmp_path: Path) -> None:
+def test_the_old_session_token_is_refused_after_refresh(tmp_path: Path) -> None:
+    """Rotation retires the previous access token for the handshake too (ADR-0005, 0009)."""
     shutil.copytree(CONFIG / "profiles", tmp_path / "config" / "profiles")
     shutil.copytree(CONFIG / "models", tmp_path / "config" / "models")
     shutil.copy(CONFIG / "devices.example.yaml", tmp_path / "config" / "devices.yaml")
     settings = Settings.from_env({}, base_dir=tmp_path)
     with TestClient(create_app(lambda: settings)) as client:
-        sid = client.post(
+        session = client.post(
             "/v1/sessions",
             json={
                 "device_id": "dev_example",
                 "secret": "example-secret-change-me",
                 "capabilities": {"inputs": ["camera_0"], "outputs": ["hud"]},
             },
-        ).json()["session_id"]
-        with client.websocket_connect(f"/v1/streams/{sid}") as ws:
-            ws.send_json({"type": "alert_sync", "last_alert_seq": 0})
-            assert ws.receive_json()["code"] == "protocol_error"
-            with pytest.raises(WebSocketDisconnect) as closed:
-                ws.receive_json()
-    assert closed.value.code == 4401
+        ).json()
+        sid = session["session_id"]
+        client.post(f"/v1/sessions/{sid}/refresh", json={"refresh_token": session["refresh_token"]})
+        old = {"Authorization": f"Bearer {session['token']}"}
+        with pytest.raises(WebSocketDenialResponse) as denied:
+            client.websocket_connect(f"/v1/streams/{sid}", headers=old).__enter__()
+    assert denied.value.status_code == 401

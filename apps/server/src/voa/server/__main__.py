@@ -1,7 +1,8 @@
 """`python -m voa.server`: validate settings, then start uvicorn (SPEC 8.3).
 
 Invalid settings refuse start with exit code 2 and name only the variables.
-In the pilot profile the validated TLS cert/key are passed to uvicorn.
+With TLS required (pilot, or network exposure: ADR-0009) the validated cert/key are
+passed to uvicorn.
 Logging uses the JSON allowlist config (`voa.server.logconfig`).
 """
 
@@ -25,7 +26,7 @@ def uvicorn_options(settings: Settings) -> dict[str, Any]:
         "log_config": server_log_config(),  # JSON allowlist lines (SPEC 8.2)
         "access_log": False,
     }
-    if settings.profile == "pilot":
+    if settings.tls_required:
         options["ssl_certfile"] = str(settings.tls_cert)
         options["ssl_keyfile"] = str(settings.tls_key)
     return options
