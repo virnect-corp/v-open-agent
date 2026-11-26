@@ -1,6 +1,6 @@
 # android client plan - Android 클라이언트 구현 계획
 
-> 상태: 구현 전 계획
+> 상태: AND-01 완료, AND-02부터 C2 계약으로 재계획(2026-11-26)
 > 범위: Android 기준 클라이언트, 에뮬레이터 우선, 실기기 SDK 어댑터 분리
 > 근거: `01-product-requirements.md` DEV-01~05, COM-01~04, DAT-02~04, `02-technical-specification.md` §7.1~7.4
 
@@ -191,44 +191,40 @@ STOPPED
 - 실패: 알 수 없는 필드, 타입, enum을 거부하고 원문을 로그로 남기지 않음
 - 결손: 선택 필드 누락 fixture 통과
 
-### AND-02: 세션, credential, capability
+> **2026-11-26 재계획 (소유자 결정):** AND-01 뒤의 옛 AND-02~06은 Stage B 계약(장치 secret, 첫 메시지 `auth`, 합성 `observation`)을 기준으로 했다. 그 계약은 Stage C2(ADR-0009, ADR-0010, ADR-0011)로 바뀌었으므로, 옛 AND-02~06과 AND-06A를 아래 AND-02~05로 다시 나눈다. 화면 흐름은 시뮬 페이지(`/ui/sim`)와 같다: **로그인(가입) → 미션 선택 → 감지 화면**. 빌드는 이 맥에 설치된 Android SDK와 JDK 17, `gradlew`로 하고 설치는 adb로 한다(서버 Docker 규칙의 예외, 호스트에 새 설치 없음). 실기기는 `adb reverse tcp:8765 tcp:8765`로 폰의 `127.0.0.1:8765`를 개발 맥 서버에 잇는다(루프백이라 TLS 없이 허용).
 
-- 선행: TASK-17, AND-01
-- 산출물: `SessionApi`, credential store, capability UI
-- 수용: 정상 세션 생성, 401, 허용 외 capability, 빈 outputs 케이스 통과
-- 보안: secret과 token이 test log, Logcat, exception message에 나오지 않음
+### AND-02: 로그인, 세션, 제어 WebSocket
 
-### AND-03: WebSocket, heartbeat, watchdog, alert_sync
+- 상태: DONE (2026-11-26, S22 실기기에서 가입, 승인 후 로그인, 제어 연결 인증, 끊김 후 재연결 시도, 세션 소멸 시 로그인 화면 복귀 확인)
 
-- 선행: TASK-18, TASK-20, AND-02
-- 산출물: `StreamClient`, `Watchdog`, `ReconnectPolicy`
-- 수용: auth timeout, 정상 heartbeat, 1/2/4/8초 backoff, watchdog 고지 1회, alert_sync 후 ACTIVE 복귀
-- 지연: fake clock으로 `watchdog_ms - 1`, `watchdog_ms`, `watchdog_ms + 1` 경계 검증
+- 선행: AND-01, TASK-40, TASK-40A
+- 산출물:
+  - `protocol`: C2 계약 모델(세션 생성은 계정 또는 장치, `capabilities.hud`, 응답의 `frame_interval_ms`, `mission`), 가입, `mission`, `config`, `frame_result`, `error`의 정원 필드, `alert`/`notice` `presentation`, `heartbeat.frames`. `auth` 메시지 삭제
+  - `session`: `SessionApi`(가입, 세션 생성, refresh), `ControlChannel`(핸드셰이크 `Authorization: Bearer`, `auth_ok` 후 `alert_sync`, heartbeat watchdog, 1/2/4/8초 재접속과 token 갱신, close 4503 정원 초과, 4401 로그아웃)
+  - `app`: 서버 주소, 로그인, 가입 화면과 연결 상태 표시. cleartext는 `127.0.0.1`/`localhost`만 허용
+- 수용: 정상 로그인과 연결, 401/403(`account_pending`, `password_change_required`)/429/503 정원 초과 문구, 핸드셰이크 헤더, watchdog 경계, 재접속 backoff, 비밀번호와 token이 `toString`, 로그, 예외 문구에 없음
 
-### AND-04: 출력, ACK, 중복 방지
+### AND-03: 미션 선택과 프레임 업로드
 
-- 선행: TASK-19, TASK-20, AND-03
-- 산출물: `OutputRouter`, HUD/TTS/haptic adapters, `AlertDeduplicator`
-- 수용: 선언한 모든 출력 호출, 수신 즉시 received, 출력 하나 이상 완료 후 played
-- 중복: 같은 `alert_id`는 렌더링 1회, 재전송 시 played ACK만 송신
-- 실패: TTS 없음, TTS 중단, HUD 없음, haptic 없음을 각각 검증
+- 선행: AND-02, TASK-41, TASK-42
+- 산출물: 미션 선택 화면(`GET /v1/missions`, `PUT .../mission`), 감지 화면의 CameraX 미리보기, `FrameUploader`(긴 변 640px JPEG, 진행 중 1개, `frame_interval_ms`와 `config`/`mission` 반영, `auth_ok`와 미션 확정 전에는 0건, 202 후 `frame_result`)
+- 수용: 연결 전 업로드 0건, 간격과 진행 중 1개, 409 `frame_busy`는 오류 아님, 연속 3회 실패 집계, 프레임이 파일과 캐시에 남지 않음
 
-### AND-05: health, 권한, foreground service
+### AND-04: HUD 출력, 상태 표시줄, ACK
 
-- 선행: AND-03
-- 산출물: `HealthReporter`, session foreground service, permission handling
-- 수용: 카메라 오류와 권한 회수 시 down 1회, 복구 시 ok 1회
-- 제약: 백그라운드에서 camera/microphone service를 새로 시작하지 않음
+- 선행: AND-03, TASK-44B
+- 산출물: `presentation` 렌더러(위치, 색, 깜빡임 축소, 유지 시간), TTS, 진동, `received`/`played` ACK와 중복 방지, 상태 표시줄 규칙표, 정원 초과와 연결 끊김 내장 문구
+- 수용: 시뮬 페이지와 같은 규칙표 단위 테스트(축소, 상태 표시줄 우선순위), 같은 `alert_id`는 1회 렌더링
 
-### AND-06: 합성 관측 Android E2E
+### AND-05: 실기기 E2E
 
-- 선행: TASK-22, AND-04, AND-05
-- 산출물: `input-mock`, Android 에뮬레이터 E2E runner
-- 통신: 에뮬레이터에서 호스트 `127.0.0.1`은 `10.0.2.2`로 접속
-- 수용: UC-01~05, UC-08, UC-09 통과
-- 프라이버시: E2E 후 Logcat, app storage, 서버 로그에 secret, token, raw media, payload text가 없음
+- 선행: AND-04, TASK-46
+- 산출물: S22에서 `server-vision`과 화재 미션으로 로그인 → 미션 → 카메라 → 경고 → `played`
+- 수용: 서버 DB의 `played`, 상태 표시줄 전이, Logcat과 앱 저장소에 비밀번호, token, 프레임 없음
 
-### AND-06A: Stage C2 서버 계약 반영 (ADR-0009, ADR-0010, ADR-0011) — 필수
+### (대체됨) AND-06A: Stage C2 서버 계약 반영
+
+> 2026-11-26 재계획으로 아래 내용은 AND-02~05에 나눠 넣었다. 계약 변경표는 참고용으로 남긴다.
 
 서버 쪽 추론, 미션, 계정 도입으로 Android 참조 클라이언트의 접속 방식이 바뀐다. 서버 Task(TASK-40~46)와 **같은 계약으로 맞춰 개발해야** 한다(소유자 지시, 2026-11-26). 시뮬 페이지(`/ui/sim`)와 Android 앱은 같은 API를 쓰므로, 시뮬 페이지가 통과한 시나리오를 Android 계측 테스트로 그대로 다시 확인한다.
 
@@ -256,7 +252,7 @@ STOPPED
 
 ### AND-07: Stage C camera/IMU 어댑터
 
-- 선행: AND-06A(프레임 업로드 계약, ADR-0009), AND-06
+- 선행: AND-03(프레임 업로드 계약, ADR-0009)
 - 산출물: camera frame source(JPEG 스냅샷, `frame_interval_ms`), IMU 회전 속도 → `camera_motion_uncompensated` 플래그, memory-only, 진행 중 1개
 - 수용: 세션 종료 후 프레임 참조 0건, cache 파일 0건, provider OFF 시 AND-06 통과
 

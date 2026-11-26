@@ -405,15 +405,20 @@ class ProtocolContractTest {
 
     @Test
     fun `sensitive tokens secrets and untrusted payload texts are never leaked in exceptions or toString`() {
-        val secretRawPayload = """{"type":"auth","token":"super_secret_token_value_12345","extra":"bad"}"""
+        val secretRawPayload = """{"type":"ack","alert_id":"super_secret_token_value_12345","extra":"bad"}"""
         val parseError = assertFailsWith<ProtocolParseException> {
             ProtocolContract.decodeClientMessage(secretRawPayload)
         }
         assertFalse(parseError.message.orEmpty().contains("super_secret_token_value_12345"))
         assertFalse(parseError.toString().contains("super_secret_token_value_12345"))
 
-        val authMsg = AuthMessage(token = "access_token_secret_999")
-        assertFalse(authMsg.toString().contains("access_token_secret_999"))
+        val wearer = CreateSessionRequest(
+            username = "kim",
+            password = "wearer_password_secret_555",
+            capabilities = SessionCapabilities(inputs = listOf(InputCap.CAMERA_0), outputs = listOf(OutputCap.HUD)),
+        )
+        assertFalse(wearer.toString().contains("wearer_password_secret_555"))
+        assertFalse(SignupRequest("kim", "signup_secret_444").toString().contains("signup_secret_444"))
 
         val sessionReq = CreateSessionRequest(
             deviceId = "dev_01",
@@ -440,7 +445,7 @@ class ProtocolContractTest {
         val created = ProtocolContract.json.decodeFromString<CreateSessionResponse>(
             """{"session_id":"sess_a","token":"t1","token_expires_at_utc":"2026-11-18T00:15:00Z",""" +
                 """"refresh_token":"r1","refresh_token_expires_at_utc":"2026-11-19T00:00:00Z",""" +
-                """"heartbeat_ms":1000,"watchdog_ms":3000}""",
+                """"heartbeat_ms":1000,"watchdog_ms":3000,"frame_interval_ms":333,"mission":null}""",
         )
         assertEquals("r1", created.refreshToken)
         assertFalse(created.toString().contains("r1"))
