@@ -109,6 +109,17 @@
           "title": "Alert Seq",
           "type": "integer"
         },
+        "presentation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Presentation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "risk_event_id": {
           "maxLength": 128,
           "minLength": 1,
@@ -333,6 +344,46 @@
         "message"
       ],
       "title": "ErrorMessage",
+      "type": "object"
+    },
+    "Flash": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "maximum": 10,
+          "minimum": 0,
+          "title": "Count",
+          "type": "integer"
+        },
+        "mode": {
+          "enum": [
+            "none",
+            "border",
+            "full_screen"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "off_ms": {
+          "maximum": 2000,
+          "minimum": 0,
+          "title": "Off Ms",
+          "type": "integer"
+        },
+        "on_ms": {
+          "maximum": 2000,
+          "minimum": 0,
+          "title": "On Ms",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "mode",
+        "count",
+        "on_ms",
+        "off_ms"
+      ],
+      "title": "Flash",
       "type": "object"
     },
     "FrameCounters": {
@@ -610,6 +661,17 @@
           "title": "Notice Id",
           "type": "string"
         },
+        "presentation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Presentation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "scenario_id": {
           "maxLength": 128,
           "minLength": 1,
@@ -636,6 +698,84 @@
         "text"
       ],
       "title": "NoticeMessage",
+      "type": "object"
+    },
+    "Presentation": {
+      "additionalProperties": false,
+      "description": "The chosen style plus the approved text; devices reduce it to what they support.",
+      "properties": {
+        "color": {
+          "enum": [
+            "red",
+            "yellow",
+            "white"
+          ],
+          "title": "Color",
+          "type": "string"
+        },
+        "flash": {
+          "$ref": "#/$defs/Flash"
+        },
+        "haptic": {
+          "enum": [
+            "none",
+            "pattern_a",
+            "pattern_b"
+          ],
+          "title": "Haptic",
+          "type": "string"
+        },
+        "position": {
+          "enum": [
+            "top_center",
+            "center",
+            "bottom_center"
+          ],
+          "title": "Position",
+          "type": "string"
+        },
+        "show_ms": {
+          "maximum": 30000,
+          "minimum": 500,
+          "title": "Show Ms",
+          "type": "integer"
+        },
+        "speech": {
+          "title": "Speech",
+          "type": "boolean"
+        },
+        "style_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Style Id",
+          "type": "string"
+        },
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "text_size": {
+          "enum": [
+            "normal",
+            "large"
+          ],
+          "title": "Text Size",
+          "type": "string"
+        }
+      },
+      "required": [
+        "position",
+        "text_size",
+        "color",
+        "flash",
+        "show_ms",
+        "speech",
+        "haptic",
+        "style_id",
+        "text"
+      ],
+      "title": "Presentation",
       "type": "object"
     },
     "RiskDecision": {

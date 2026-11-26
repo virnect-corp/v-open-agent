@@ -14,17 +14,28 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from voa.config.model_registry import ModelManifest
 from voa.providers.rtdetr import (
     DEFAULT_SCORE_FLOOR,
+    WEIGHTS_FILE,
     Detector,
     RawDetection,
     RtDetrProvider,
     VisionUnavailable,
     WeightsError,
+    verify_weights,
 )
+
+Device = Literal["cpu", "cuda"]
+WeightsStatus = Literal["ready", "missing", "sha256_mismatch"]
+
+
+@dataclass(frozen=True)
+class Deployment:
+    device: Device = "cpu"
+    score_floor: float = DEFAULT_SCORE_FLOOR
 
 
 class DetectorFactory(Protocol):
@@ -73,6 +84,8 @@ class ModelPool:
     _locks: dict[str, asyncio.Lock] = field(default_factory=dict)
     _guard: threading.Lock = field(default_factory=threading.Lock)
     _recent: dict[str, deque[int]] = field(default_factory=dict)
+    deployments: dict[str, Deployment] = field(default_factory=dict)
+    _weights_cache: dict[str, tuple[tuple[int, int], WeightsStatus]] = field(default_factory=dict)
 
     def lock(self, model_id: str) -> asyncio.Lock:
         """One inference at a time per model. asyncio.Lock wakes waiters in arrival order,
@@ -106,7 +119,41 @@ class ModelPool:
         except (WeightsError, VisionUnavailable, ValueError, OSError) as error:
             raise ModelUnavailable(model_id) from error
         with self._guard:
+            self.deployments.setdefault(model_id, Deployment())  # loaded = deployed
             return self._detectors.setdefault(model_id, loaded)
+
+    def deploy(self, model_id: str, deployment: Deployment) -> None:
+        """Load (blocking: call from a worker thread) and record the deployment settings."""
+        self.detector(model_id)
+        with self._guard:
+            self.deployments[model_id] = deployment
+
+    def undeploy(self, model_id: str) -> bool:
+        with self._guard:
+            self._detectors.pop(model_id, None)
+            return self.deployments.pop(model_id, None) is not None
+
+    def weights_status(self, model_id: str) -> WeightsStatus:
+        """Check the local weights against the manifest without loading (cached by size/mtime)."""
+        manifest = self.manifests[model_id]
+        if manifest.weights == "builtin":
+            return "ready"
+        path = self.weights_root / model_id / WEIGHTS_FILE
+        try:
+            stat = path.stat()
+        except OSError:
+            return "missing"
+        key = (stat.st_size, stat.st_mtime_ns)
+        cached = self._weights_cache.get(model_id)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        try:
+            verify_weights(model_id, manifest.sha256, self.weights_root)
+            status: WeightsStatus = "ready"
+        except WeightsError:
+            status = "sha256_mismatch"
+        self._weights_cache[model_id] = (key, status)
+        return status
 
     def provider(self, model_id: str, score_floor: float) -> RtDetrProvider:
         manifest = self.manifests[model_id]
@@ -115,5 +162,5 @@ class ModelPool:
             model_id=model_id,
             revision=manifest.revision,
             labels=tuple(manifest.labels),
-            score_floor=min(DEFAULT_SCORE_FLOOR, score_floor),
+            score_floor=min(self.deployments.get(model_id, Deployment()).score_floor, score_floor),
         )

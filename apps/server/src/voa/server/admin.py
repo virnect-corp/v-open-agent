@@ -1,4 +1,5 @@
-"""Admin mission API (SPEC 7.7, ADR-0010; TASK-44A).
+"""Admin API: missions (TASK-44A), models, deployments, settings, detect (TASK-44B).
+SPEC 7.7, ADR-0009, ADR-0010.
 
 Every route needs an admin login token (ADR-0011). Missions are edited as a
 `draft` and published as a new immutable version; running sessions keep the
@@ -9,7 +10,8 @@ outcome only: request bodies and tokens are never recorded (SPEC 8.1).
 import asyncio
 import contextlib
 import sqlite3
-from typing import TYPE_CHECKING, Any
+import time
+from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -17,8 +19,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from voa.config.missions import MissionDraft, MissionInfo, MissionSettings
 from voa.config.model_registry import check_profile_models, load_manifests
+from voa.contracts.messages import HudStyle
+from voa.contracts.observation import DetectionPayload
 from voa.engine.profile import ProfileError
-from voa.server.inference import ModelUnavailable
+from voa.providers.rtdetr import DEFAULT_SCORE_FLOOR, Frame
+from voa.server.frames import MAX_SIDE, jpeg_size
+from voa.server.hud import AdminSettings, SettingsStore
+from voa.server.inference import Deployment, ModelUnavailable
 
 if TYPE_CHECKING:
     from voa.server.app import ServerRuntime
@@ -42,6 +49,38 @@ class UpdateMissionRequest(BaseModel):
     description: str | None = Field(default=None, max_length=500)
     profile: dict[str, Any] | None = None
     settings: MissionSettings | None = None
+
+
+class DeployRequest(BaseModel):
+    model_config = REQUEST_CONFIG
+    model_id: str = Field(min_length=1, max_length=128)
+    device: Literal["cpu", "cuda"] = "cpu"
+    score_floor: float = Field(default=DEFAULT_SCORE_FLOOR, ge=0.0, le=1.0)
+
+
+class SettingsRequest(BaseModel):
+    """Any subset; given parts replace the current ones."""
+
+    model_config = REQUEST_CONFIG
+    frame_interval_ms: int | None = Field(default=None, ge=100, le=5000)
+    hud_styles: dict[str, HudStyle] | None = None
+    hud_style_map: dict[str, str] | None = None
+
+
+def models_in_use(runtime: "ServerRuntime") -> dict[str, list[str]]:
+    """model_id -> missions needing it: latest published versions and running sessions."""
+    used: dict[str, set[str]] = {}
+    profiles = [m.profile for m in runtime.session_missions.values()]
+    if runtime.missions is not None:
+        for info in runtime.missions.all():
+            published = runtime.missions.published(info.mission_id)
+            if published is not None and not isinstance(published, ProfileError):
+                profiles.append(published.profile)
+    for profile in profiles:
+        for scenario in profile.scenarios:
+            for model_id in scenario.required_models.values():
+                used.setdefault(model_id, set()).add(profile.profile_id)
+    return {model_id: sorted(missions) for model_id, missions in used.items()}
 
 
 def register_admin_routes(app: FastAPI) -> None:
@@ -285,6 +324,169 @@ def register_admin_routes(app: FastAPI) -> None:
         numbers = runtime.missions.versions(mission_id)
         return JSONResponse(
             {"versions": [version_body(runtime, mission_id, n) for n in reversed(numbers)]}
+        )
+
+    # --- models and deployments (TASK-44B) ---
+
+    @app.get("/v1/admin/models")
+    async def list_models(request: Request) -> JSONResponse:
+        runtime = runtime_of(request)
+        denied = _admin_guard(runtime, request)
+        if denied is not None:
+            return denied
+        pool = runtime.models
+        used = models_in_use(runtime)
+        found = []
+        for model_id, manifest in sorted(pool.manifests.items()):
+            deployment = pool.deployments.get(model_id)
+            found.append(
+                {
+                    "model_id": model_id,
+                    "kind": manifest.kind,
+                    "revision": manifest.revision,
+                    "labels": list(manifest.labels),
+                    "weights": await asyncio.to_thread(pool.weights_status, model_id),
+                    "deployed": deployment is not None,
+                    "device": deployment.device if deployment else None,
+                    "score_floor": deployment.score_floor if deployment else None,
+                    "used_by": used.get(model_id, []),
+                }
+            )
+        return JSONResponse({"models": found})
+
+    @app.post("/v1/admin/deployments")
+    async def deploy_model(request: Request, body: DeployRequest) -> JSONResponse:
+        runtime = runtime_of(request)
+        denied = _admin_guard(runtime, request)
+        if denied is not None:
+            return denied
+        manifest = runtime.models.manifests.get(body.model_id)
+        if manifest is None:
+            return _error(404, "model_not_found")
+        if manifest.kind != "object_detection":
+            record(runtime, "model_deploy", body.model_id, "model_not_servable")
+            return _error(400, "model_not_servable")  # trackers do not run server-side yet
+        if body.device == "cuda":
+            record(runtime, "model_deploy", body.model_id, "device_unavailable")
+            return _error(400, "device_unavailable")  # GPU placement is not implemented yet
+        deployment = Deployment(device=body.device, score_floor=body.score_floor)
+        try:
+            await asyncio.to_thread(runtime.models.deploy, body.model_id, deployment)
+        except ModelUnavailable:
+            record(runtime, "model_deploy", body.model_id, "model_not_ready")
+            return _error(400, "model_not_ready")
+        record(runtime, "model_deploy", body.model_id, "ok")
+        return JSONResponse(
+            {"model_id": body.model_id, "deployed": True, **deployment.__dict__}, status_code=201
+        )
+
+    @app.delete("/v1/admin/deployments/{model_id}")
+    async def undeploy_model(request: Request, model_id: str) -> JSONResponse:
+        runtime = runtime_of(request)
+        denied = _admin_guard(runtime, request)
+        if denied is not None:
+            return denied
+        if model_id not in runtime.models.deployments:
+            return _error(404, "model_not_deployed")
+        if models_in_use(runtime).get(model_id):
+            record(runtime, "model_undeploy", model_id, "model_in_use")
+            return _error(409, "model_in_use")
+        async with runtime.models.lock(model_id):  # let a running inference finish
+            runtime.models.undeploy(model_id)
+        record(runtime, "model_undeploy", model_id, "ok")
+        return JSONResponse({"model_id": model_id, "deployed": False})
+
+    # --- settings (TASK-44B) ---
+
+    @app.get("/v1/admin/settings")
+    async def get_settings(request: Request) -> JSONResponse:
+        runtime = runtime_of(request)
+        denied = _admin_guard(runtime, request)
+        if denied is not None:
+            return denied
+        if not runtime.settings_valid:
+            return _error(503, "settings_invalid")
+        settings = runtime.current_settings
+        return JSONResponse(
+            {
+                **settings.model_dump(mode="json"),
+                "styles": {k: v.model_dump(mode="json") for k, v in settings.styles().items()},
+            }
+        )
+
+    @app.put("/v1/admin/settings")
+    async def put_settings(request: Request, body: SettingsRequest) -> JSONResponse:
+        runtime = runtime_of(request)
+        denied = _admin_guard(runtime, request)
+        if denied is not None:
+            return denied
+        current = runtime.current_settings
+        try:
+            updated = AdminSettings(
+                frame_interval_ms=body.frame_interval_ms or current.frame_interval_ms,
+                hud_styles=body.hud_styles if body.hud_styles is not None else current.hud_styles,
+                hud_style_map=(
+                    body.hud_style_map if body.hud_style_map is not None else current.hud_style_map
+                ),
+            )
+        except ValueError:  # pydantic ValidationError is a ValueError
+            return _error(400, "invalid_request")
+        if updated.unknown_styles():
+            record(runtime, "settings_update", "settings", "style_not_found")
+            return _error(400, "style_not_found")
+        SettingsStore(runtime.settings.active_config_dir, runtime.settings.frame_interval_ms).save(
+            updated
+        )
+        await runtime.apply_settings(updated)
+        record(runtime, "settings_update", "settings", "ok")
+        return JSONResponse(updated.model_dump(mode="json"))
+
+    # --- one-image detection check (TASK-44B) ---
+
+    @app.post("/v1/admin/detect")
+    async def detect(request: Request, model_id: str) -> JSONResponse:
+        """Detections only, no engine, nothing stored or logged (SPEC 7.7)."""
+        runtime = runtime_of(request)
+        denied = _admin_guard(runtime, request)
+        if denied is not None:
+            return denied
+        if model_id not in runtime.models.deployments:
+            return _error(503, "no_model_deployed")
+        content_type = request.headers.get("content-type", "").split(";")[0].strip()
+        body = await request.body()
+        size = jpeg_size(body)
+        if (
+            content_type != "image/jpeg"
+            or len(body) > runtime.settings.frame_max_bytes
+            or size is None
+            or max(size) > MAX_SIDE
+        ):
+            return _error(400, "frame_rejected")
+        frame = Frame("admin_detect", 0, body)
+
+        def run() -> list[object]:
+            return list(runtime.models.provider(model_id, 1.0).process(frame))
+
+        async with runtime.models.lock(model_id):
+            begin = time.perf_counter_ns()
+            try:
+                drafts = await asyncio.to_thread(run)
+            except ModelUnavailable:
+                return _error(503, "no_model_deployed")
+            provider_ms = (time.perf_counter_ns() - begin) / 1_000_000
+        detections = []
+        for draft in drafts:
+            payload = getattr(draft, "payload", None)
+            if isinstance(payload, DetectionPayload):
+                detections += [d.model_dump(mode="json") for d in payload.detections]
+        return JSONResponse(
+            {
+                "model_id": model_id,
+                "width": size[0],
+                "height": size[1],
+                "detections": detections,
+                "provider_ms": round(provider_ms, 1),
+            }
         )
 
     @app.get("/v1/admin/changes")

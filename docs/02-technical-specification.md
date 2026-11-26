@@ -846,6 +846,14 @@ OutputCap = Literal["hud", "speaker", "haptic"]
   - `GET .../versions` → `{versions: [{version, profile, settings}]}` 최신 먼저. `GET /v1/admin/changes` → `{changes: [...]}` 최신 먼저(최대 200). `action`: `mission_create`, `mission_update`, `mission_publish`, `mission_archive`, `result_code`: `ok` 또는 오류 code(실패도 기록).
 - 배치 하한 점수: 실제 Provider 하한은 `min(배치 score_floor, 그 모델을 근거로 쓰는 게시 미션 시나리오들의 min_score)`이다. 그래야 profile이 받아들일 근거를 Provider가 먼저 버리지 않는다.
 - 모든 변경(배치, 해제, 미션 생성, 수정, 게시, 보관, settings)은 `admin_changes`에 기록한다. 요청 원문과 token은 남기지 않는다.
+- 요청과 응답 (TASK-44B):
+  - `GET /v1/admin/models` → `{models: [{model_id, kind, revision, labels, weights, deployed, device, score_floor, used_by}]}`. `weights`는 로드 없이 sha256만 확인한다(`builtin`은 `ready`, 파일 크기와 수정 시각으로 캐시). `used_by`는 그 모델을 요구하는 최신 게시 미션과 진행 중 세션의 미션이다.
+  - `POST /v1/admin/deployments` → 201 `{model_id, deployed, device, score_floor}`. 모르는 모델 404 `model_not_found`, `object_detection`이 아니면 400 `model_not_servable`, 가중치 문제 400 `model_not_ready`. **`device: "cuda"`는 아직 400 `device_unavailable`이다**(GPU 배치 미구현, GPU 서버를 쓸 때 구현). 세션이나 게시가 모델을 처음 불러오면 기본값(`cpu`, 0.25)으로 배치된 것으로 본다.
+  - `DELETE /v1/admin/deployments/{id}` → `{model_id, deployed: false}`, 배치 안 됨 404 `model_not_deployed`, `used_by`가 있으면 409 `model_in_use`. 진행 중인 추론이 끝난 뒤 내린다.
+  - settings 저장: `VOA_ACTIVE_CONFIG_DIR/settings.yaml`. 없으면 기본값(`frame_interval_ms = VOA_FRAME_INTERVAL_MS`, 스타일은 기본 2개). 파일이 깨졌으면 표시와 간격은 기본값으로 동작하고 `GET`은 503 `settings_invalid`, 관리자가 `PUT`으로 저장하면 풀린다. `PUT`은 준 부분만 바꾸고, 범위나 형식이 틀리면 400 `invalid_request`, `hud_style_map`이 없는 스타일을 가리키면 400 `style_not_found`. `hud_styles`는 기본 스타일에 더해지거나 같은 ID를 덮는다. `GET` 응답의 `styles`는 실제로 쓰는 전체 목록이다.
+  - 간격 변경은 미션 자체 간격이 없는 진행 중 세션에 `config`로 보낸다(미션 값이 우선, §7.7 미션 설정 적용).
+  - `POST /v1/admin/detect?model_id=` → `{model_id, width, height, detections, provider_ms}`. 배치되지 않은 모델 503 `no_model_deployed`, JPEG 검사는 §7.6과 같다(400 `frame_rejected`). 하한은 배치 `score_floor`다. 이미지와 결과는 저장하거나 기록하지 않는다.
+  - `alert`/`notice`의 `presentation`: 서버 세션은 항상 넣는다. notice의 스타일 키는 `degraded`만 쓴다(시나리오 ID 항목은 alert용).
 
 ## 8. 저장 / 보안 / 설정
 
