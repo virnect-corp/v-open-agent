@@ -2,7 +2,7 @@ package ai.voa.client.session
 
 import ai.voa.client.protocol.AckMessage
 import ai.voa.client.protocol.AckStatus
-import ai.voa.client.protocol.AuthMessage
+import ai.voa.client.protocol.AlertSyncMessage
 import ai.voa.client.protocol.AuthOkMessage
 import ai.voa.client.protocol.ProtocolParseException
 import ai.voa.client.testing.FakeMonotonicClock
@@ -34,7 +34,7 @@ class SessionStateTest {
     @Test
     fun `fake transport validates outbound and inbound frames without external server`() {
         val transport = FakeTransport()
-        transport.sendClientMessage(AuthMessage(token = "tok_test_01"))
+        transport.sendClientMessage(AlertSyncMessage(lastAlertSeq = 0))
         transport.sendClientMessage(AckMessage(alertId = "alert_01", status = AckStatus.RECEIVED))
         assertEquals(2, transport.outboundFrames.size)
 

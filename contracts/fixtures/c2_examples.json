@@ -1,0 +1,141 @@
+{
+  "session_created": {
+    "session_id": "sess_01",
+    "token": "tok_example_access",
+    "token_expires_at_utc": "2026-11-26T07:15:00Z",
+    "refresh_token": "tok_example_refresh",
+    "refresh_token_expires_at_utc": "2026-11-27T07:00:00Z",
+    "heartbeat_ms": 1000,
+    "watchdog_ms": 3000,
+    "frame_interval_ms": 333,
+    "mission": {"mission_id": "fire_c1", "version": 2, "name": "화재 감시", "frame_interval_ms": 333}
+  },
+  "session_created_no_mission": {
+    "session_id": "sess_02",
+    "token": "tok_example_access",
+    "token_expires_at_utc": "2026-11-26T07:15:00Z",
+    "refresh_token": "tok_example_refresh",
+    "refresh_token_expires_at_utc": "2026-11-27T07:00:00Z",
+    "heartbeat_ms": 1000,
+    "watchdog_ms": 3000,
+    "frame_interval_ms": 333,
+    "mission": null
+  },
+  "capacity_error_body": {"code": "capacity_exceeded", "active": 3, "max": 3, "retry_after_s": 30},
+  "signup_response": {"user_id": "usr_01", "status": "pending"},
+  "missions": {
+    "missions": [
+      {
+        "mission_id": "fire_c1",
+        "name": "화재 감시",
+        "description": "",
+        "version": 2,
+        "scenarios": [{"id": "fire_in_view", "labels": ["fire"], "severity": "attention"}],
+        "models": ["rtdetr-r18-dfire"],
+        "frame_interval_ms": 333
+      }
+    ]
+  },
+  "frame_result_body": {
+    "frame_id": "f_000001",
+    "seq": 1,
+    "status": "processed",
+    "results": [
+      {
+        "model_id": "rtdetr-r18-dfire",
+        "observation_id": "obs_01",
+        "detections": [{"label": "fire", "bbox": [0.4, 0.3, 0.5, 0.6], "score": 0.08}]
+      }
+    ],
+    "states": {"fire_in_view": "candidate"},
+    "timing": {
+      "capture_ts_monotonic_ns": 1000000000,
+      "received_at_utc": "2026-11-26T07:00:00.100000Z",
+      "processing_started_at_utc": "2026-11-26T07:00:00.101000Z",
+      "completed_at_utc": "2026-11-26T07:00:00.500000Z",
+      "queue_ms": 0.5,
+      "provider_ms": 398.2,
+      "engine_us": 1800
+    }
+  },
+  "frame_accepted_body": {"frame_id": "f_000002", "status": "accepted"},
+  "server_messages": [
+    {"type": "auth_ok", "session_id": "sess_01", "server_time_utc": "2026-11-26T07:00:00Z"},
+    {"type": "mission", "mission_id": "fire_c1", "version": 2, "name": "화재 감시", "frame_interval_ms": 333},
+    {"type": "config", "frame_interval_ms": 500},
+    {
+      "type": "heartbeat",
+      "server_time_utc": "2026-11-26T07:00:01Z",
+      "states": {"fire_in_view": "clear"},
+      "frames": {"received": 3, "processed": 2, "skipped": 1, "rejected": 0}
+    },
+    {
+      "type": "alert",
+      "alert_seq": 1,
+      "alert": {
+        "alert_id": "alert_01",
+        "text": "불꽃으로 보이는 것이 감지되었습니다. 주변을 확인하세요.",
+        "text_kind": "approved_template",
+        "delivery_state": "sent",
+        "valid_until_utc": "2026-11-26T07:00:05Z"
+      },
+      "risk_event_id": "re_01",
+      "scenario_id": "fire_in_view",
+      "presentation": {
+        "position": "top_center",
+        "text_size": "large",
+        "color": "red",
+        "flash": {"mode": "full_screen", "count": 3, "on_ms": 200, "off_ms": 200},
+        "show_ms": 4000,
+        "speech": true,
+        "haptic": "pattern_a",
+        "style_id": "attention_default",
+        "text": "불꽃으로 보이는 것이 감지되었습니다. 주변을 확인하세요."
+      }
+    },
+    {
+      "type": "notice",
+      "notice_id": "notice_01",
+      "kind": "degraded",
+      "scenario_id": "fire_in_view",
+      "text": "카메라 상태를 확인할 수 없어 감지가 제한됩니다.",
+      "presentation": {
+        "position": "top_center",
+        "text_size": "normal",
+        "color": "yellow",
+        "flash": {"mode": "border", "count": 1, "on_ms": 200, "off_ms": 200},
+        "show_ms": 3000,
+        "speech": true,
+        "haptic": "pattern_b",
+        "style_id": "degraded_default",
+        "text": "카메라 상태를 확인할 수 없어 감지가 제한됩니다."
+      }
+    },
+    {
+      "type": "frame_result",
+      "frame_id": "f_000002",
+      "seq": 2,
+      "status": "processed",
+      "results": [],
+      "states": {"fire_in_view": "warning"},
+      "timing": {
+        "capture_ts_monotonic_ns": 1333000000,
+        "received_at_utc": "2026-11-26T07:00:00.433000Z",
+        "processing_started_at_utc": "2026-11-26T07:00:00.434000Z",
+        "completed_at_utc": "2026-11-26T07:00:01.700000Z",
+        "queue_ms": 0.4,
+        "provider_ms": 1260.0,
+        "engine_us": 1700
+      }
+    },
+    {"type": "error", "code": "mission_not_selected", "message": "select a mission for this session first"},
+    {
+      "type": "error",
+      "code": "capacity_exceeded",
+      "message": "the server is at its session limit; retry later",
+      "active": 3,
+      "max": 3,
+      "retry_after_s": 30
+    }
+  ]
+}

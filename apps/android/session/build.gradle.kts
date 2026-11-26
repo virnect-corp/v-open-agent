@@ -9,7 +9,7 @@ kotlin {
 dependencies {
     api(project(":protocol"))
     implementation(libs.kotlinx.coroutines.core)
-    implementation(libs.okhttp)
+    api(libs.okhttp)
 
     testImplementation(project(":test-support"))
     testImplementation(libs.kotlin.test)

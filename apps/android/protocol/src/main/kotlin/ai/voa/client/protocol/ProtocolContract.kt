@@ -28,10 +28,12 @@ object ProtocolContract {
         "notice",
         "heartbeat",
         "error",
+        "mission",
+        "config",
+        "frame_result",
     )
 
     private val knownClientMessageTypes = setOf(
-        "auth",
         "alert_sync",
         "observation",
         "ack",
