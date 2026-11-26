@@ -21,6 +21,8 @@ DEFAULTS: dict[str, str] = {
     "VOA_TLS_CERT": "",
     "VOA_TLS_KEY": "",
     "VOA_POLICY_PROFILE": "config/profiles/indoor_research_v0.yaml",
+    "VOA_DEFAULT_MISSION": "",
+    "VOA_ACTIVE_CONFIG_DIR": "var/config",
     "VOA_MODELS_DIR": "config/models",
     "VOA_MODEL_WEIGHTS_DIR": "var/models",
     "VOA_DEVICES_FILE": "config/devices.yaml",
@@ -59,6 +61,8 @@ class Settings:
     tls_cert: Path | None
     tls_key: Path | None
     policy_profile: Path
+    default_mission: str  # "" = the VOA_POLICY_PROFILE mission, "-" = none (ADR-0010)
+    active_config_dir: Path
     models_dir: Path
     model_weights_dir: Path
     devices_file: Path
@@ -107,6 +111,8 @@ class Settings:
             tls_cert=optional_path("VOA_TLS_CERT"),
             tls_key=optional_path("VOA_TLS_KEY"),
             policy_profile=path("VOA_POLICY_PROFILE"),
+            default_mission=raw["VOA_DEFAULT_MISSION"].strip(),
+            active_config_dir=path("VOA_ACTIVE_CONFIG_DIR"),
             models_dir=path("VOA_MODELS_DIR"),
             model_weights_dir=path("VOA_MODEL_WEIGHTS_DIR"),
             devices_file=path("VOA_DEVICES_FILE"),

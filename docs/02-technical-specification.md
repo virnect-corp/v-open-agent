@@ -556,14 +556,15 @@ devices:
     allowed_outputs: [hud, speaker]
 ```
 - `salt_hex`는 16바이트, `digest_hex`는 32바이트다. 검증값은 `hashlib.scrypt(secret.encode("utf-8"), salt=bytes.fromhex(salt_hex), n=2**14, r=8, p=1, dklen=32)`로 계산하고 `hmac.compare_digest`로 비교한다. 파라미터는 파일에서 바꾸지 않는다.
-- `POST /v1/sessions {device_id, secret, capabilities: {inputs: [...], outputs: [...], hud?: {...}}, mission_id?}` → `{session_id, token, token_expires_at_utc, refresh_token, refresh_token_expires_at_utc, heartbeat_ms, watchdog_ms, frame_interval_ms, mission: {mission_id, version, name} | null}` (`frame_interval_ms`는 §7.6, 미션은 ADR-0010. `mission_id`를 생략하면 `VOA_DEFAULT_MISSION`, 그것도 비어 있으면 미션 없이 만들고 장치가 고른다)
+- `POST /v1/sessions {device_id, secret, capabilities: {inputs: [...], outputs: [...], hud?: {...}}, mission_id?}` → `{session_id, token, token_expires_at_utc, refresh_token, refresh_token_expires_at_utc, heartbeat_ms, watchdog_ms, frame_interval_ms, mission: {mission_id, version, name} | null}` (`frame_interval_ms`는 §7.6, 미션은 ADR-0010. `mission_id`를 생략하면 기본 미션(§8.3 `VOA_DEFAULT_MISSION`)을 쓰고, 기본 미션이 없으면 미션 없이 만들어 장치가 고른다. 없거나 보관된 `mission_id`는 404 `mission_not_found`다)
   - **동시 세션 상한 (ADR-0010)**: 장치 세션 수가 `VOA_MAX_SESSIONS`에 이르면 503 `{"code":"capacity_exceeded","active","max","retry_after_s"}`와 `Retry-After` 헤더를 돌려준다. 관리자 접속은 세지 않는다.
 - **미션 선택 (ADR-0010)**: 세션 access token으로 호출한다.
-  - `GET /v1/missions` → 게시된 미션 목록 `[{mission_id, name, description, version, scenarios: [{id, labels, severity}], models: [model_id], frame_interval_ms}]`
+  - `GET /v1/missions` → 게시된 미션 목록 `{"missions": [{mission_id, name, description, version, scenarios: [{id, labels, severity}], models: [model_id]}]}`. 보관, 미게시, 검증 실패 미션은 빠진다. 미션별 `frame_interval_ms`는 TASK-42에서 더한다.
   - `PUT /v1/sessions/{session_id}/mission {mission_id}` → `{mission_id, version, name, frame_interval_ms}`
     - 고른 미션의 최신 게시 버전으로 세션 엔진을 새로 만든다. 다른 미션으로 바꾸면 이전 엔진을 버리고 새 미션의 시나리오는 모두 `unknown`에서 시작한다.
     - 없거나 게시되지 않은 미션은 404 `mission_not_found`다.
-    - 제어 WebSocket에 `mission` 메시지를 보낸다.
+    - 제어 WebSocket에 `mission` 메시지를 보낸다. 연결할 때 미션이 이미 있으면 `auth_ok` 다음에 한 번 보낸다.
+  - 미션이 없는 세션의 `observation`은 `error(code="mission_not_selected")`이고, heartbeat의 `states`는 비어 있다.
   - token과 refresh token은 각각 `secrets.token_urlsafe(32)`로 만든다. 서버는 각 token의 SHA-256 digest만 메모리에 보관하고 검증 시 `hmac.compare_digest`를 사용한다. 평문, secret, digest를 DB와 로그에 남기지 않는다.
   - access token TTL은 `VOA_TOKEN_TTL_S`, refresh token TTL은 `VOA_REFRESH_TOKEN_TTL_S`다. access token은 WebSocket handshake 시점에 검증하며 이미 인증된 WebSocket은 token 만료로 즉시 종료하지 않는다.
   - `POST /v1/sessions/{session_id}/refresh {refresh_token}`은 세션이 서버 메모리에 있고 refresh token이 유효할 때 `{token, token_expires_at_utc, refresh_token, refresh_token_expires_at_utc}`를 반환한다. 성공 시 이전 token 둘을 즉시 폐기하는 일회성 회전이고, 새 refresh token의 만료 시각은 이 시점부터 다시 계산한다(ADR-0005).
@@ -863,8 +864,8 @@ VOA_ALLOW_INSECURE_DEV=true          # pilot 에서는 false 강제
 VOA_EXPOSURE=                        # loopback | network. 비면 VOA_BIND 로 추론 (127.0.0.1 → loopback)
 VOA_TLS_CERT=                        # pilot, 또는 VOA_EXPOSURE=network 이면 필수 (없으면 시작 거부, ADR-0009)
 VOA_TLS_KEY=
-VOA_POLICY_PROFILE=config/profiles/indoor_research_v0.yaml  # 미션 도입 전 단일 profile. 처음 시작 시 미션 v1로 가져옴 (ADR-0010)
-VOA_DEFAULT_MISSION=                 # mission_id 를 생략한 세션의 미션. 비면 장치가 고를 때까지 미션 없음
+VOA_POLICY_PROFILE=config/profiles/indoor_research_v0.yaml  # 미션 도입 전 단일 profile. 처음 시작 시 같은 폴더의 profile 과 함께 미션 v1로 가져옴(이 파일이 같은 ID 중 우선, 이미 있는 미션은 그대로) (ADR-0010)
+VOA_DEFAULT_MISSION=                 # mission_id 를 생략한 세션의 미션. 비면 VOA_POLICY_PROFILE 의 미션, "-" 면 장치가 고를 때까지 미션 없음 (TASK-41)
 VOA_MODELS_DIR=config/models            # 모델 manifest 폴더 (ADR-0004)
 VOA_MODEL_WEIGHTS_DIR=var/models        # 가중치 루트. weights=file 모델은 <dir>/<model_id>/ 에서 읽는다
 VOA_DEVICES_FILE=config/devices.yaml

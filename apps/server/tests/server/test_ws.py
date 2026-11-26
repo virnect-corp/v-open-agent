@@ -108,7 +108,10 @@ def harness(workdir: Path) -> Iterator[Harness]:
                 ws.__exit__(None, None, None)
 
 
-def receive(ws: WebSocketTestSession, *, skip: tuple[str, ...] = ("heartbeat",)) -> dict[str, Any]:
+def receive(
+    ws: WebSocketTestSession, *, skip: tuple[str, ...] = ("heartbeat", "mission")
+) -> dict[str, Any]:
+    """Next message, skipping heartbeats and the `mission` notice after connect (ADR-0010)."""
     while True:
         message = dict(ws.receive_json())
         if message["type"] not in skip:
@@ -274,7 +277,7 @@ def test_rejected_observation_returns_admission(harness: Harness) -> None:
 
 def test_heartbeat_carries_states(harness: Harness) -> None:
     ws = authed(harness, harness.session())
-    beat = receive(ws, skip=())
+    beat = receive(ws, skip=("mission",))
     ws.close()
     assert beat["type"] == "heartbeat"
     assert beat["states"] == {"moving_object_in_attention_zone": "unknown", OBSTACLE: "unknown"}

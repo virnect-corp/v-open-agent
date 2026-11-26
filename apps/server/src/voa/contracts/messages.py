@@ -20,7 +20,11 @@ RejectedAdmission = Literal[
     "rejected_session_mismatch", "duplicate", "out_of_order", "stale_on_arrival", "config_error"
 ]
 ErrorCode = Literal[
-    "unsupported_message_type", "rejected_schema", "protocol_error", "stream_not_declared"
+    "unsupported_message_type",
+    "rejected_schema",
+    "protocol_error",
+    "stream_not_declared",
+    "mission_not_selected",
 ]
 # Reserved for Stage C/D (SPEC 7.2); the MVP answers unsupported_message_type.
 RESERVED_TYPES = frozenset({"frame", "audio_chunk", "imu", "ptt_start", "ptt_end"})
@@ -107,6 +111,16 @@ class HeartbeatMessage(BaseModel):
     states: dict[str, RiskState]
 
 
+class MissionMessage(BaseModel):
+    """The session's mission was set or changed (ADR-0010)."""
+
+    model_config = MODEL_CONFIG
+    type: Literal["mission"] = "mission"
+    mission_id: Id
+    version: int = Field(ge=1)
+    name: str
+
+
 class ErrorMessage(BaseModel):
     """`message` is a fixed text per code; client input is never echoed back."""
 
@@ -123,6 +137,7 @@ ServerMessage = Annotated[
     | AlertMessage
     | NoticeMessage
     | HeartbeatMessage
+    | MissionMessage
     | ErrorMessage,
     Field(discriminator="type"),
 ]
@@ -137,6 +152,7 @@ ERROR_TEXT: dict[ErrorCode, str] = {
     "rejected_schema": "message does not match the schema",
     "protocol_error": "message is not allowed at this point",
     "stream_not_declared": "stream was not declared for this session",
+    "mission_not_selected": "select a mission for this session first",
 }
 
 

@@ -382,7 +382,8 @@ def test_e2e_run_leaves_no_secret_token_or_payload_text(
         leaks.watch(f"token_{index}", token)
 
     # Config is test input (example secret comment, warning text in the profile), not output.
-    files = leaks.scan_tree(tmp_path, skip=[workdir / "config"])
+    # var/config holds the missions imported from those profiles (ADR-0010): input as well.
+    files = leaks.scan_tree(tmp_path, skip=[workdir / "config", workdir / "var" / "config"])
     assert any(path.name == "voa.sqlite3" for path in files)
     leaks.scan("stdout", out.encode("utf-8"))
     leaks.scan("stderr", err.encode("utf-8"))

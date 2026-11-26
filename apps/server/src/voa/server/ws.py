@@ -105,16 +105,15 @@ async def input_loop(runtime: "ServerRuntime", stream: SessionStream) -> None:
             await _push(runtime, stream, websocket, messages)
 
 
-async def _heartbeat_loop(
-    runtime: "ServerRuntime", stream: SessionStream, websocket: WebSocket
-) -> None:
+async def _heartbeat_loop(runtime: "ServerRuntime", session_id: str, websocket: WebSocket) -> None:
     interval = runtime.settings.heartbeat_ms / 1000
     with contextlib.suppress(WebSocketDisconnect, RuntimeError):
         while True:
             await asyncio.sleep(interval)
+            stream = runtime.streams.get(session_id)  # replaced when the mission changes
             beat = HeartbeatMessage(
                 server_time_utc=runtime.clock.at(runtime.mono_ns()),
-                states=dict(stream.engine.states()),
+                states=dict(stream.engine.states()) if stream is not None else {},
             )
             await _send(websocket, beat)
 
@@ -152,11 +151,8 @@ def register_stream_routes(app: FastAPI) -> None:
     async def stream_endpoint(websocket: WebSocket, session_id: str) -> None:
         runtime: ServerRuntime = websocket.app.state.runtime
         token, subprotocol = handshake_credentials(websocket.headers)
-        stream = runtime.streams.get(session_id)
-        if (
-            token is None
-            or stream is None
-            or not runtime.sessions.verify_access(session_id, token, runtime.mono_ns())
+        if token is None or not runtime.sessions.verify_access(
+            session_id, token, runtime.mono_ns()
         ):
             await _refuse(websocket)
             return
@@ -169,9 +165,12 @@ def register_stream_routes(app: FastAPI) -> None:
             ),
         )
         runtime.connections[session_id] = websocket
-        heartbeat = asyncio.create_task(_heartbeat_loop(runtime, stream, websocket))
+        heartbeat = asyncio.create_task(_heartbeat_loop(runtime, session_id, websocket))
         try:
-            await _serve(runtime, stream, websocket)
+            mission = runtime.mission_message(session_id)
+            if mission is not None:
+                await _send(websocket, mission)
+            await _serve(runtime, session_id, websocket)
         except WebSocketDisconnect:
             pass
         finally:
@@ -183,15 +182,21 @@ def register_stream_routes(app: FastAPI) -> None:
                     await websocket.close(code=CLOSE_UNAUTHORIZED)
 
 
-async def _serve(runtime: "ServerRuntime", stream: SessionStream, websocket: WebSocket) -> None:
+async def _serve(runtime: "ServerRuntime", session_id: str, websocket: WebSocket) -> None:
     synced = False
     while True:
         event = await websocket.receive()
         if event["type"] == "websocket.disconnect":
             return
         message = parse_client_message(event)
+        stream = runtime.streams.get(session_id)  # current mission's engine (ADR-0010)
         if isinstance(message, str):
             await _send(websocket, error_message(message))
+        elif stream is None:
+            if isinstance(message, ObservationMessage):
+                await _send(websocket, error_message("mission_not_selected"))
+            elif isinstance(message, AlertSyncMessage):
+                synced = True  # nothing to re-send before a mission exists
         elif isinstance(message, AlertSyncMessage):
             if synced:  # once per connection (SPEC 7.2)
                 await _send(websocket, error_message("protocol_error"))

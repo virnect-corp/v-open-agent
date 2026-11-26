@@ -20,8 +20,10 @@ from fastapi import FastAPI, Request, WebSocket
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from voa.config.missions import MissionStore, MissionVersion
 from voa.config.model_registry import check_profile_models, load_manifests
 from voa.config.profile_loader import load_profile
+from voa.contracts.messages import MissionMessage
 from voa.engine.profile import PolicyProfile, ProfileError
 from voa.server.accounts import (
     ADMIN_USERNAME,
@@ -41,7 +43,9 @@ from voa.server.auth import (
     AckRequest,
     CreateSessionRequest,
     IssuedTokens,
+    MissionRef,
     RefreshRequest,
+    SelectMissionRequest,
     SessionCreated,
     SessionRegistry,
     TokenPair,
@@ -80,12 +84,35 @@ def load_policy(settings: Settings) -> PolicyProfile | ProfileError:
     return check_profile_models(profile, manifests) or profile
 
 
+def default_mission(
+    settings: Settings, missions: MissionStore
+) -> tuple[str | None, MissionVersion | ProfileError | None]:
+    """ADR-0010: profiles become missions v1 once; pick the default mission.
+
+    `VOA_DEFAULT_MISSION` empty = the mission of `VOA_POLICY_PROFILE` (the pre-mission
+    behaviour), `-` = none until the device picks one.
+    """
+    missions.import_profiles(settings.policy_profile.parent, first=settings.policy_profile)
+    if settings.default_mission == "-":
+        return None, None
+    mission_id = settings.default_mission
+    if not mission_id:
+        profile = load_policy(settings)
+        if isinstance(profile, ProfileError):
+            return None, profile
+        mission_id = profile.profile_id
+    found = missions.published(mission_id)
+    if found is None:
+        return mission_id, ProfileError("file_not_found", f"mission:{mission_id}")
+    return mission_id, found
+
+
 @dataclass
 class ServerRuntime:
     """Process-wide state shared by all sessions."""
 
     settings: Settings
-    profile: PolicyProfile | ProfileError
+    profile: PolicyProfile | ProfileError | None  # the default mission's, None = no default
     store: SQLiteStore | None
     devices: dict[str, DeviceConfig] | None
     ids: SecureIdFactory
@@ -94,6 +121,10 @@ class ServerRuntime:
     sessions: SessionRegistry
     login_tokens: LoginTokens
     accounts: Accounts | None = None
+    missions: MissionStore | None = None
+    default_mission: MissionVersion | None = None
+    session_missions: dict[str, MissionVersion] = field(default_factory=dict)
+    session_started: dict[str, tuple[str, datetime, str | None]] = field(default_factory=dict)
     streams: dict[str, SessionStream] = field(default_factory=dict)
     connections: dict[str, WebSocket] = field(default_factory=dict)
     tick_tasks: dict[str, "asyncio.Task[None]"] = field(default_factory=dict)
@@ -108,9 +139,19 @@ class ServerRuntime:
             store: SQLiteStore | None = SQLiteStore(settings.db_path)
         except (sqlite3.Error, OSError):
             store = None
+        missions = MissionStore(settings.active_config_dir, settings.models_dir)
+        try:
+            _, mission = default_mission(settings, missions)
+        except OSError:
+            mission = ProfileError("file_not_found", "missions")
+        profile: PolicyProfile | ProfileError | None = (
+            mission.profile if isinstance(mission, MissionVersion) else mission
+        )
         return cls(
             settings=settings,
-            profile=load_policy(settings),
+            profile=profile,
+            missions=missions,
+            default_mission=mission if isinstance(mission, MissionVersion) else None,
             store=store,
             devices=load_devices(settings.devices_file),
             ids=(ids := SecureIdFactory()),
@@ -144,22 +185,58 @@ class ServerRuntime:
             return False
         return True
 
-    def end_session(self, session_id: str, now_mono_ns: int) -> None:
-        """Stop the tick loop, forget engine and token digests, record ended_at_utc."""
+    def start_mission(
+        self, session_id: str, mission: MissionVersion, inputs: frozenset[str], now_mono_ns: int
+    ) -> SessionStream:
+        """A new engine for the session's mission; a previous one is discarded (ADR-0010)."""
+        self._stop_stream(session_id)
+        device_id = self.session_started[session_id][0]
+        stream = SessionStream.start(
+            session_id=session_id,
+            device_id=device_id,
+            inputs=inputs,
+            profile=mission.profile,
+            ids=self.ids,
+            clock=self.clock,
+            store=self.store,
+            now_mono_ns=now_mono_ns,
+            input_queue_max=self.settings.input_queue_max,
+        )
+        self.streams[session_id] = stream
+        self.session_missions[session_id] = mission
+        self.tick_tasks[session_id] = asyncio.create_task(tick_loop(self, stream))
+        self.input_tasks[session_id] = asyncio.create_task(input_loop(self, stream))
+        return stream
+
+    def mission_message(self, session_id: str) -> MissionMessage | None:
+        mission = self.session_missions.get(session_id)
+        if mission is None:
+            return None
+        return MissionMessage(
+            mission_id=mission.info.mission_id, version=mission.version, name=mission.info.name
+        )
+
+    def _stop_stream(self, session_id: str) -> None:
         for tasks in (self.tick_tasks, self.input_tasks):
             task = tasks.pop(session_id, None)
             if task is not None:
                 task.cancel()
-        stream = self.streams.pop(session_id, None)
-        auth = self.sessions.get(session_id)
+        self.streams.pop(session_id, None)
+
+    def end_session(self, session_id: str, now_mono_ns: int) -> None:
+        """Stop the loops, forget engine and token digests, record ended_at_utc."""
+        self._stop_stream(session_id)
+        self.session_missions.pop(session_id, None)
+        started = self.session_started.pop(session_id, None)
         self.sessions.remove(session_id)
-        if stream is not None and self.store is not None:
+        if started is not None and self.store is not None:
+            device_id, started_at, user_id = started
             self.store.save_session(
                 session_id=session_id,
-                device_id=stream.device_id,
-                started_at_utc=stream.started_at_utc,
+                device_id=device_id,
+                started_at_utc=started_at,
                 ended_at_utc=self.clock.at(now_mono_ns),
-                user_id=auth.user_id if auth is not None else None,
+                user_id=user_id,
             )
 
     def sweep_sessions(self, now_mono_ns: int) -> list[str]:
@@ -236,6 +313,14 @@ async def _every(interval_s: float, action: Callable[[], object]) -> None:
 def _error(status_code: int, code: str) -> JSONResponse:
     """REST error body is `{"code": ...}` only; request contents are never echoed."""
     return JSONResponse({"code": code}, status_code=status_code)
+
+
+def _mission_ref(mission: MissionVersion | None) -> MissionRef | None:
+    if mission is None:
+        return None
+    return MissionRef(
+        mission_id=mission.info.mission_id, version=mission.version, name=mission.info.name
+    )
 
 
 def _token_pair(runtime: ServerRuntime, tokens: IssuedTokens) -> dict[str, object]:
@@ -335,39 +420,34 @@ def create_app(
         if not caps.outputs:
             return _error(400, "no_output_capability")
 
-        profile = runtime.profile
-        assert isinstance(profile, PolicyProfile)  # guaranteed by the readiness check
+        mission = runtime.default_mission
+        if body.mission_id is not None:
+            chosen = runtime.missions.published(body.mission_id) if runtime.missions else None
+            if not isinstance(chosen, MissionVersion):
+                return _error(404, "mission_not_found")
+            mission = chosen
         now = runtime.mono_ns()
         device_id = body.device_id if user_id is None else user_id
         assert device_id is not None
         session, tokens = runtime.sessions.create(device_id, caps, now, user_id=user_id)
+        started_at = runtime.clock.at(now)
+        runtime.session_started[session.session_id] = (session.device_id, started_at, user_id)
         if runtime.store is not None:
             runtime.store.save_session(
                 session_id=session.session_id,
                 device_id=session.device_id,
-                started_at_utc=runtime.clock.at(now),
+                started_at_utc=started_at,
                 user_id=user_id,
             )
-        stream = SessionStream.start(
-            session_id=session.session_id,
-            device_id=session.device_id,
-            inputs=frozenset(caps.inputs),
-            profile=profile,
-            ids=runtime.ids,
-            clock=runtime.clock,
-            store=runtime.store,
-            now_mono_ns=now,
-            input_queue_max=runtime.settings.input_queue_max,
-        )
-        runtime.streams[session.session_id] = stream
-        runtime.tick_tasks[session.session_id] = asyncio.create_task(tick_loop(runtime, stream))
-        runtime.input_tasks[session.session_id] = asyncio.create_task(input_loop(runtime, stream))
+        if mission is not None:
+            runtime.start_mission(session.session_id, mission, frozenset(caps.inputs), now)
         created = SessionCreated.model_validate(
             {
                 "session_id": session.session_id,
                 **_token_pair(runtime, tokens),
                 "heartbeat_ms": runtime.settings.heartbeat_ms,
                 "watchdog_ms": runtime.settings.client_watchdog_ms,
+                "mission": _mission_ref(mission),
             }
         )
         return JSONResponse(created.model_dump(mode="json"))
@@ -408,6 +488,63 @@ def create_app(
         stream.ack(alert_id, body.status, now)
         state = stream.dispatcher.records[alert_id].state
         return JSONResponse({"alert_id": alert_id, "delivery_state": state})
+
+    # --- Missions (ADR-0010, SPEC 7.1) ---
+
+    @app.get("/v1/missions")
+    async def list_missions(request: Request) -> JSONResponse:
+        runtime: ServerRuntime = request.app.state.runtime
+        if _bearer_session(runtime, request, runtime.mono_ns()) is None:
+            return _error(401, "unauthorized")
+        assert runtime.missions is not None
+        found = []
+        for info in runtime.missions.all():
+            version = runtime.missions.published(info.mission_id)
+            if not isinstance(version, MissionVersion):
+                continue  # archived, never published or invalid: not offered
+            profile = version.profile
+            found.append(
+                {
+                    "mission_id": info.mission_id,
+                    "name": info.name,
+                    "description": info.description,
+                    "version": version.version,
+                    "scenarios": [
+                        {"id": s.id, "labels": list(s.labels), "severity": s.severity}
+                        for s in profile.scenarios
+                    ],
+                    "models": sorted(
+                        {m for s in profile.scenarios for m in s.required_models.values()}
+                    ),
+                }
+            )
+        return JSONResponse({"missions": found})
+
+    @app.put("/v1/sessions/{session_id}/mission")
+    async def select_mission(
+        request: Request, session_id: str, body: SelectMissionRequest
+    ) -> JSONResponse:
+        runtime: ServerRuntime = request.app.state.runtime
+        now = runtime.mono_ns()
+        owner = _bearer_session(runtime, request, now)
+        if owner is None:
+            return _error(401, "unauthorized")
+        auth = runtime.sessions.get(session_id)
+        if owner != session_id or auth is None:
+            return _error(404, "not_found")
+        assert runtime.missions is not None
+        mission = runtime.missions.published(body.mission_id)
+        if not isinstance(mission, MissionVersion):
+            return _error(404, "mission_not_found")
+        runtime.start_mission(session_id, mission, frozenset(auth.inputs), now)
+        message = runtime.mission_message(session_id)
+        websocket = runtime.connections.get(session_id)
+        if websocket is not None and message is not None:
+            with contextlib.suppress(RuntimeError):
+                await websocket.send_text(message.model_dump_json())
+        ref = _mission_ref(mission)
+        assert ref is not None
+        return JSONResponse(ref.model_dump(mode="json"))
 
     # --- Accounts (ADR-0011, SPEC 7.1) ---
 
