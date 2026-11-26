@@ -121,9 +121,11 @@ function harness(routes = {}) {
   const clock = { now: 1000 };
   const timers = [];
   const table = {
-    "POST /v1/sessions": [200, SESSION],
+    "POST /v1/auth/login": [200, { token: "login-SECRET-0", role: "wearer", password_change_required: false }],
     "GET /v1/missions": [200, { missions: [FIRE] }],
-    "PUT /v1/sessions/sess_1/mission": [200, FIRE],
+    // choosing a mission connects: the session starts with that mission (TASK-47)
+    "POST /v1/sessions": () => [200, { ...SESSION, frame_interval_ms: FIRE.frame_interval_ms, mission: FIRE }],
+    "DELETE /v1/sessions/sess_1": [204, null],
     ...routes,
   };
   const fetch = async (path, init) => {
@@ -150,32 +152,70 @@ const FRAME = (clock) => ({ bytes: new Uint8Array([0xff, 0xd8, 1]), image: "fram
 
 async function ready(h) {
   await h.controller.login("kim", "pw-12345678");
-  FakeSocket.last.serverSends({ type: "auth_ok", session_id: "sess_1", server_time_utc: "2026-11-26T00:00:00Z" });
   await h.controller.chooseMission("fire_c1");
+  FakeSocket.last.serverSends({ type: "auth_ok", session_id: "sess_1", server_time_utc: "2026-11-26T00:00:00Z" });
   return FakeSocket.last;
 }
 
-test("login opens the control socket with the bearer subprotocol, then waits for a mission", async () => {
+test("login holds no slot; choosing a mission connects with the bearer subprotocol (TASK-47)", async () => {
   const h = harness();
+  FakeSocket.last = null;
   await h.controller.login("kim", "pw-12345678", "sim");
-  const body = JSON.parse(h.calls[0].body);
-  assert.deepEqual(body.capabilities.inputs, ["camera_0"]);
+  assert.deepEqual(JSON.parse(h.calls[0].body), { username: "kim", password: "pw-12345678" });
+  assert.equal(h.calls[1].path, "/v1/missions");
+  assert.equal(h.calls[1].headers.Authorization, "Bearer login-SECRET-0", "missions with the login token");
+  assert.equal(FakeSocket.last, null, "no session or socket on the mission screen");
+  assert.equal(h.controller.state.screen, "missions");
+  assert.deepEqual(h.controller.state.missions, [FIRE]);
+
+  await h.controller.chooseMission("fire_c1");
+  const create = h.calls.find((c) => c.path === "/v1/sessions");
+  assert.equal(create.headers.Authorization, "Bearer login-SECRET-0");
+  const body = JSON.parse(create.body);
+  assert.equal(body.mission_id, "fire_c1");
   assert.deepEqual(body.capabilities.hud, HUD_MODELS.color_full.hud);
   assert.equal(body.device_label, "sim");
+  assert.ok(!("username" in body) && !("password" in body));
   const ws = FakeSocket.last;
   assert.equal(ws.url, "ws://test/v1/streams/sess_1");
   assert.deepEqual(ws.protocols, ["voa.v1", "voa.bearer.tok-SECRET-1"]);
-  assert.equal(h.controller.state.screen, "missions");
-  assert.deepEqual(h.controller.state.missions, [FIRE]);
+  assert.equal(h.controller.state.screen, "glass");
   assert.ok(!JSON.stringify(h.controller.state).includes("SECRET"), "tokens are not page state");
   ws.serverSends({ type: "auth_ok", session_id: "sess_1", server_time_utc: "x" });
   assert.deepEqual(ws.sent[0], { type: "alert_sync", last_alert_seq: 0 });
-  assert.equal(h.controller.startCapture(), false, "no capture before the mission is chosen");
+});
+
+test("changing the mission disconnects: socket closed, session deleted, login kept (TASK-47)", async () => {
+  const h = harness();
+  const ws = await ready(h);
+  h.controller.startCapture();
+  await h.controller.changeMission();
+  assert.equal(ws.closed, true);
+  const del = h.calls.find((c) => c.method === "DELETE");
+  assert.equal(del.path, "/v1/sessions/sess_1");
+  assert.equal(del.headers.Authorization, "Bearer tok-SECRET-1", "deleted with the session token");
+  assert.equal(h.controller.state.screen, "missions");
+  assert.equal(h.controller.state.sessionId, null);
+  assert.equal(h.controller.state.uploading, false);
+  assert.equal(h.timers.length, 0, "no reconnect after a deliberate disconnect");
+  const listAgain = h.calls.filter((c) => c.path === "/v1/missions").at(-1);
+  assert.equal(listAgain.headers.Authorization, "Bearer login-SECRET-0", "back on the login token");
+});
+
+test("a session the server ended returns to missions, not to the login", async () => {
+  const h = harness({ "POST /v1/sessions/sess_1/refresh": [401, { code: "unauthorized" }] });
+  const ws = await ready(h);
+  ws.onclose({ code: 1006 });
+  await h.timers[0].fn();
+  assert.equal(h.controller.state.screen, "missions");
+  assert.equal(h.controller.state.error, message("session_ended"));
+  assert.ok(!h.calls.some((c) => c.method === "DELETE"), "nothing left to delete");
 });
 
 test("no upload before auth_ok and the mission choice", async () => {
   const h = harness();
   await h.controller.login("kim", "pw-12345678");
+  assert.equal(h.controller.startCapture(), false, "no session yet");
   await h.controller.chooseMission("fire_c1");
   assert.equal(h.controller.startCapture(), false, "socket not authenticated yet");
   assert.equal(await h.controller.upload(FRAME(h.clock)), null);
@@ -268,6 +308,7 @@ test("an alert is shown, spoken and acknowledged received then played; a repeat 
 test("capacity: session refused with 503 or socket closed 4503 shows the notice once", async () => {
   const refused = harness({ "POST /v1/sessions": [503, { code: "capacity_exceeded", active: 3, max: 3, retry_after_s: 30 }] });
   await refused.controller.login("kim", "pw-12345678");
+  await refused.controller.chooseMission("fire_c1");
   assert.equal(refused.controller.state.capacity, true);
   assert.equal(refused.controller.state.error, message("capacity_exceeded"));
   assert.deepEqual(refused.spoken, [BUILT_IN.capacity]);
@@ -275,6 +316,7 @@ test("capacity: session refused with 503 or socket closed 4503 shows the notice 
 
   const closed = harness();
   await closed.controller.login("kim", "pw-12345678");
+  await closed.controller.chooseMission("fire_c1");
   const ws = FakeSocket.last;
   ws.serverSends({ type: "error", code: "capacity_exceeded", message: "x", active: 3, max: 3, retry_after_s: 30 });
   ws.onclose({ code: 4503 });
@@ -331,7 +373,7 @@ test("three failed uploads show a server error; frame_busy is not a failure", as
 });
 
 test("login errors and signup pending", async () => {
-  const pending = harness({ "POST /v1/sessions": [403, { code: "account_pending" }] });
+  const pending = harness({ "POST /v1/auth/login": [403, { code: "account_pending" }] });
   await pending.controller.login("kim", "x");
   assert.equal(pending.controller.state.screen, "login");
   assert.equal(pending.controller.state.error, message("account_pending"));
@@ -363,22 +405,24 @@ test("admin handoff: only the opener's same-origin login message is taken, then 
 
   const h = harness();
   await h.controller.loginAsAdmin("admin-login-tok");
-  const call = h.calls[0];
-  assert.equal(call.path, "/v1/sessions");
+  assert.equal(h.controller.state.screen, "missions", "no login form");
+  assert.equal(h.calls[0].path, "/v1/missions");
+  assert.equal(h.calls[0].headers.Authorization, "Bearer admin-login-tok");
+  await h.controller.chooseMission("fire_c1");
+  const call = h.calls.find((c) => c.path === "/v1/sessions");
   assert.equal(call.headers.Authorization, "Bearer admin-login-tok");
   const body = JSON.parse(call.body);
   assert.ok(!("username" in body) && !("password" in body));
   assert.deepEqual(body.capabilities.inputs, ["camera_0"]);
-  assert.equal(h.controller.state.screen, "missions");
   assert.deepEqual(FakeSocket.last.protocols, ["voa.v1", "voa.bearer.tok-SECRET-1"], "then the session token");
 });
 
 test("a refused admin handoff says the admin login ended instead of a password error", async () => {
-  const h = harness({ "POST /v1/sessions": [401, { code: "unauthorized" }] });
+  const h = harness({ "GET /v1/missions": [401, { code: "unauthorized" }] });
   await h.controller.loginAsAdmin("expired-tok");
   assert.equal(h.controller.state.screen, "login");
   assert.equal(h.controller.state.error, message("admin_login_expired"));
-  const plain = harness({ "POST /v1/sessions": [401, { code: "unauthorized" }] });
+  const plain = harness({ "POST /v1/auth/login": [401, { code: "unauthorized" }] });
   await plain.controller.login("kim", "x");
   assert.equal(plain.controller.state.error, message("unauthorized"));
 });

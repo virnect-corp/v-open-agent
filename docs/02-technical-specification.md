@@ -561,6 +561,8 @@ devices:
 - **미션 선택 (ADR-0010)**: 세션 access token으로 호출한다.
   - `GET /v1/missions` → 게시된 미션 목록 `{"missions": [{mission_id, name, description, version, scenarios: [{id, labels, severity}], models: [model_id]}]}`. 보관, 미게시, 검증 실패 미션은 빠진다. 미션별 `frame_interval_ms`는 TASK-42에서 더한다.
   - `PUT /v1/sessions/{session_id}/mission {mission_id}` → `{mission_id, version, name, frame_interval_ms}`
+- **로그인과 연결 분리 (TASK-47, 소유자 결정)**: 로그인은 계정만 확인하고 정원을 차지하지 않는다. 미션 목록(`GET /v1/missions`)은 로그인 token으로도 볼 수 있다. 감지를 시작할 때 `POST /v1/sessions`에 `Authorization: Bearer <로그인 token>`(착용자, 관리자 모두)과 `{mission_id, capabilities, device_label?}`를 보내 **연결**한다. 감지를 멈추고 미션 화면으로 돌아가거나 로그아웃할 때 `DELETE /v1/sessions/{session_id}`(세션 token)로 **연결 해제**한다: 제어 WebSocket을 1000으로 닫고 세션을 끝내며(`ended_at_utc`), 204를 준다. 로그인은 그대로다. 다른 세션 token은 404, token 없음은 401.
+- **끊긴 세션 정리 (TASK-47)**: 세션이 만들어진 뒤 제어 연결을 맺기 전, 또는 연결이 끊긴 뒤 `VOA_SESSION_IDLE_S`(기본 120초) 동안 다시 연결하지 않으면 세션을 끝내 정원을 돌려준다(앱 강제 종료 대비). 그 안에 다시 연결하면 같은 세션으로 이어진다. 정리는 `VOA_SESSION_SWEEP_INTERVAL_S`마다, 그리고 세션 생성에서 정원을 세기 직전에 한다. 기존 refresh 만료 정리(ADR-0005)는 그대로다.
     - 고른 미션의 최신 게시 버전으로 세션 엔진을 새로 만든다. 다른 미션으로 바꾸면 이전 엔진을 버리고 새 미션의 시나리오는 모두 `unknown`에서 시작한다.
     - 없거나 게시되지 않은 미션은 404 `mission_not_found`다.
     - 제어 WebSocket에 `mission` 메시지를 보낸다. 연결할 때 미션이 이미 있으면 `auth_ok` 다음에 한 번 보낸다.
@@ -898,6 +900,7 @@ VOA_CLIENT_WATCHDOG_MS=3000          # 세션 응답의 watchdog_ms (>= 2 × HEA
 VOA_TOKEN_TTL_S=900
 VOA_REFRESH_TOKEN_TTL_S=86400
 VOA_SESSION_SWEEP_INTERVAL_S=60         # 세션 정리와 무관한 보존 기간 삭제는 §8.1(1시간)
+VOA_SESSION_IDLE_S=120               # 제어 연결 없이 이만큼 지난 세션은 끝내 정원을 돌려준다 (TASK-47, 소유자 결정 2분)
 VOA_INPUT_QUEUE_MAX=64
 VOA_METADATA_RETENTION_DAYS=7
 VOA_RAW_MEDIA_STORAGE=false          # MVP 에서는 true 로 설정하면 시작 거부 (저장 경로 미구현)
@@ -915,7 +918,7 @@ VOA_FRAME_INTERVAL_MAX_MS=1000       # 부하 시 서버가 늘릴 수 있는 �
 
 상대 경로 설정은 서버 작업 디렉터리 `apps/server`를 기준으로 해석한다. 따라서 기본 `config/profiles/...`와 `config/devices.yaml`은 저장소 기준 `apps/server/config/...`를 가리킨다.
 
-숫자 설정은 `MAX_SESSIONS >= 1`, `FRAME_INTERVAL_MS <= FRAME_INTERVAL_MAX_MS <= 5000`, `FRAME_MAX_BYTES > 0`, `100 <= FRAME_INTERVAL_MS <= 5000`, `FRAME_SYNC_TIMEOUT_MS > 0`, `TICK_INTERVAL_MS > 0`, `HEARTBEAT_MS > 0`, `CLIENT_WATCHDOG_MS >= 2 × HEARTBEAT_MS`, `TOKEN_TTL_S > 0`, `REFRESH_TOKEN_TTL_S >= TOKEN_TTL_S`, `SESSION_SWEEP_INTERVAL_S > 0`, `INPUT_QUEUE_MAX >= 1`, `METADATA_RETENTION_DAYS >= 1`을 만족해야 한다. 위반하면 서버는 시작하지 않는다.
+숫자 설정은 `MAX_SESSIONS >= 1`, `FRAME_INTERVAL_MS <= FRAME_INTERVAL_MAX_MS <= 5000`, `FRAME_MAX_BYTES > 0`, `100 <= FRAME_INTERVAL_MS <= 5000`, `FRAME_SYNC_TIMEOUT_MS > 0`, `TICK_INTERVAL_MS > 0`, `HEARTBEAT_MS > 0`, `CLIENT_WATCHDOG_MS >= 2 × HEARTBEAT_MS`, `TOKEN_TTL_S > 0`, `REFRESH_TOKEN_TTL_S >= TOKEN_TTL_S`, `SESSION_SWEEP_INTERVAL_S > 0`, `SESSION_IDLE_S > 0`, `INPUT_QUEUE_MAX >= 1`, `METADATA_RETENTION_DAYS >= 1`을 만족해야 한다. 위반하면 서버는 시작하지 않는다.
 
 어떤 모델을 쓸지는 `VOA_POLICY_PROFILE`(시나리오의 `required_models`)과 `VOA_MODELS_DIR`(manifest)이 정한다. `weights: file` 모델의 가중치는 `VOA_MODEL_WEIGHTS_DIR/<model_id>/` 아래에 사용자가 미리 받아 둔 파일만 읽고, 로드 전에 manifest의 `sha256`과 대조한다. 서버는 가중치를 다운로드하지 않는다(`VOA_MODEL_AUTO_DOWNLOAD=false`). manifest 대조가 실패하면 서버는 시작하되 `readyz` 503을 반환하고 엔진은 `ProfileError`로 만든다(INV-10).
 

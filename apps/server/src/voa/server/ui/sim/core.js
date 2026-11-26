@@ -23,6 +23,7 @@ export const MESSAGES = {
   mission_not_found: "미션을 찾을 수 없습니다.",
   not_ready: "서버가 아직 준비되지 않았습니다.",
   network: "서버에 연결할 수 없습니다.",
+  session_ended: "연결이 끝났습니다. 미션을 다시 고르면 새로 연결합니다.",
   admin_login_expired: "관리자 로그인이 끝났습니다. 관리자 페이지에서 다시 로그인한 뒤 시뮬레이터를 누르세요.",
   admin_handoff_missing: "관리자 페이지에서 로그인 정보를 받지 못했습니다. 관리자 페이지의 시뮬레이터 버튼으로 다시 열거나 여기서 로그인하세요.",
 };
@@ -125,7 +126,10 @@ const RECONNECT_MS = [1000, 2000, 4000, 8000];
 export class SimController {
   constructor(deps) {
     this.deps = deps;
-    this.tokens = null; // {token, refresh_token}: memory only
+    this.tokens = null; // session {token, refresh_token}: memory only
+    this.loginToken = null; // account login (TASK-47): memory only
+    this.deviceLabel = null;
+    this.fromAdmin = false;
     this.ws = null;
     this.reconnectTimer = null;
     this.reconnectAttempt = 0;
@@ -182,9 +186,12 @@ export class SimController {
     return statusBar({ ...this.state, now: this.deps.now() });
   }
 
+  /** Session token while connected, else the login token (TASK-47). */
   async api(method, path, { json, bytes, headers = {} } = {}) {
-    const all = { ...headers };
-    if (this.tokens) all.Authorization = `Bearer ${this.tokens.token}`;
+    const all = {};
+    const bearer = this.tokens?.token ?? this.loginToken;
+    if (bearer) all.Authorization = `Bearer ${bearer}`;
+    Object.assign(all, headers);
     let body;
     if (json !== undefined) {
       all["Content-Type"] = "application/json";
@@ -207,7 +214,7 @@ export class SimController {
     }
   }
 
-  // --- account and session ---
+  // --- account: login holds no slot; choosing a mission connects (TASK-47) ---
 
   async signup(username, password, displayName) {
     this.set({ busy: true, error: null, notice: null });
@@ -220,41 +227,24 @@ export class SimController {
   }
 
   async login(username, password, deviceLabel) {
-    const json = { username, password };
-    if (deviceLabel) json.device_label = deviceLabel;
-    return this.createSession(json, {});
-  }
-
-  /** Admin opened us from the admin page: its login token creates the session. */
-  async loginAsAdmin(loginToken) {
-    return this.createSession({ device_label: "관리자 시뮬" }, { Authorization: `Bearer ${loginToken}` }, true);
-  }
-
-  async createSession(fields, headers, fromAdmin = false) {
     this.set({ busy: true, error: null, notice: null, capacity: false });
-    const json = {
-      ...fields,
-      capabilities: { inputs: ["camera_0"], outputs: OUTPUTS, hud: HUD_MODELS[this.state.hudModel].hud },
-    };
-    const result = await this.api("POST", "/v1/sessions", { json, headers });
-    if (!result.ok) {
-      let code = result.data?.code ?? "network";
-      if (code === "capacity_exceeded") this.enterCapacity();
-      if (fromAdmin && code === "unauthorized") code = "admin_login_expired";
-      return this.set({ busy: false, error: message(code), notice: null });
+    const result = await this.api("POST", "/v1/auth/login", { json: { username, password } });
+    if (!result.ok) return this.set({ busy: false, error: message(result.data?.code ?? "network") });
+    if (result.data.password_change_required) {
+      return this.set({ busy: false, error: message("password_change_required") });
     }
-    const s = result.data;
-    this.tokens = { token: s.token, refresh_token: s.refresh_token };
-    this.set({
-      busy: false,
-      sessionId: s.session_id,
-      heartbeatMs: s.heartbeat_ms,
-      watchdogMs: s.watchdog_ms,
-      frameIntervalMs: s.frame_interval_ms,
-      mission: s.mission,
-      screen: "missions",
-    });
-    this.connect();
+    this.loginToken = result.data.token;
+    this.deviceLabel = deviceLabel || null;
+    this.set({ busy: false, screen: "missions" });
+    await this.loadMissions();
+  }
+
+  /** Admin opened us from the admin page: its login token is our login (TASK-46A). */
+  async loginAsAdmin(loginToken) {
+    this.loginToken = loginToken;
+    this.deviceLabel = "관리자 시뮬";
+    this.fromAdmin = true;
+    this.set({ busy: false, error: null, notice: null, screen: "missions" });
     await this.loadMissions();
   }
 
@@ -265,29 +255,89 @@ export class SimController {
 
   async loadMissions() {
     const result = await this.api("GET", "/v1/missions");
-    if (result.ok) this.set({ missions: result.data.missions });
-    else this.set({ error: message(result.data?.code ?? "network") });
+    if (result.ok) return this.set({ missions: result.data.missions });
+    const code = result.data?.code ?? "network";
+    if (result.status === 401) return this.logout(message(this.fromAdmin ? "admin_login_expired" : "unauthorized"));
+    this.set({ error: message(code) });
   }
 
-  /** The wearer picks a mission on the first screen; capture waits for this. */
+  /** Connect: a session with this mission, then the control socket. Capture waits for auth_ok. */
   async chooseMission(missionId) {
-    this.set({ busy: true, error: null });
-    const result = await this.api("PUT", `/v1/sessions/${encodeURIComponent(this.state.sessionId)}/mission`, { json: { mission_id: missionId } });
-    if (!result.ok) return this.set({ busy: false, error: message(result.data?.code ?? "network") });
+    this.set({ busy: true, error: null, notice: null, capacity: false });
+    const json = {
+      mission_id: missionId,
+      capabilities: { inputs: ["camera_0"], outputs: OUTPUTS, hud: HUD_MODELS[this.state.hudModel].hud },
+    };
+    if (this.deviceLabel) json.device_label = this.deviceLabel;
+    const result = await this.api("POST", "/v1/sessions", { json });
+    if (!result.ok) {
+      let code = result.data?.code ?? "network";
+      if (code === "capacity_exceeded") this.enterCapacity();
+      if (result.status === 401) return this.logout(message(this.fromAdmin ? "admin_login_expired" : "unauthorized"));
+      return this.set({ busy: false, error: message(code) });
+    }
+    const s = result.data;
+    this.tokens = { token: s.token, refresh_token: s.refresh_token };
     this.played.clear();
+    this.reconnectAttempt = 0;
     this.set({
       busy: false,
-      mission: result.data,
-      frameIntervalMs: result.data.frame_interval_ms,
+      sessionId: s.session_id,
+      heartbeatMs: s.heartbeat_ms,
+      watchdogMs: s.watchdog_ms,
+      frameIntervalMs: s.frame_interval_ms,
+      mission: s.mission,
       missionConfirmed: true,
       states: {},
+      lastAlertSeq: 0,
+      counters: { sent: 0, skipped: 0, failed: 0 },
+      uploadFailures: 0,
       screen: "glass",
+    });
+    this.connect();
+  }
+
+  /** The server ended the session (idle, swept, closed): back to missions, login kept. */
+  async sessionLost() {
+    this.tokens = null; // nothing to delete on the server
+    await this.disconnect();
+    this.set({ screen: "missions", error: message("session_ended") });
+    return this.loadMissions();
+  }
+
+  /** Disconnect: end the session so its slot is free, keep the login (TASK-47). */
+  async disconnect() {
+    this.stopCapture();
+    if (this.reconnectTimer !== null) this.deps.clearTimer(this.reconnectTimer);
+    this.reconnectTimer = null;
+    const ws = this.ws;
+    this.ws = null; // its close event is ours, not a lost link
+    try {
+      ws?.close(1000);
+    } catch {
+      /* already closed */
+    }
+    if (this.tokens && this.state.sessionId) {
+      await this.api("DELETE", `/v1/sessions/${encodeURIComponent(this.state.sessionId)}`);
+    }
+    this.tokens = null;
+    this.frames.clear();
+    this.set({
+      sessionId: null,
+      connected: false,
+      authOk: false,
+      missionConfirmed: false,
+      capacity: false,
+      states: {},
+      hud: null,
+      judged: null,
+      timing: null,
     });
   }
 
-  changeMission() {
-    this.stopCapture();
-    this.set({ missionConfirmed: false, screen: "missions" });
+  async changeMission() {
+    await this.disconnect();
+    this.set({ screen: "missions" });
     return this.loadMissions();
   }
 
@@ -371,7 +421,7 @@ export class SimController {
     const wasConnected = this.state.connected;
     this.set({ connected: false, authOk: false });
     if (code === 4503) return this.enterCapacity();
-    if (code === 4401 || code === 1008) return this.logout(message("unauthorized"));
+    if (code === 4401 || code === 1008) return this.sessionLost();
     if (wasConnected && !this.state.disconnectAnnounced) {
       this.deps.speak(BUILT_IN.disconnected);
       this.set({ disconnectAnnounced: true });
@@ -407,22 +457,15 @@ export class SimController {
         json: { refresh_token: this.tokens.refresh_token },
       });
       if (refreshed.ok) this.tokens = { token: refreshed.data.token, refresh_token: refreshed.data.refresh_token };
-      else if (refreshed.status === 401) return this.logout(message("unauthorized"));
+      else if (refreshed.status === 401) return this.sessionLost();
       this.connect();
     }, delay);
   }
 
   logout(error = null) {
-    this.stopCapture();
-    if (this.reconnectTimer !== null) this.deps.clearTimer(this.reconnectTimer);
-    this.reconnectTimer = null;
-    const ws = this.ws;
-    this.ws = null;
-    try {
-      ws?.close();
-    } catch {
-      /* ignore */
-    }
+    void this.disconnect(); // gives the slot back; fire and forget
+    this.loginToken = null;
+    this.fromAdmin = false;
     this.tokens = null;
     this.frames.clear();
     this.played.clear();

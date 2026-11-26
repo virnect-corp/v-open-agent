@@ -42,6 +42,8 @@
 
 ### 3. 착용자 세션 (글래스와 시뮬)
 
+> 2026-11-26 보강(TASK-47, 소유자 결정): 로그인은 계정 확인만 하고 정원을 차지하지 않는다. 미션을 고를 때 로그인 token으로 세션을 만들어 연결하고, 미션 화면으로 돌아가면 `DELETE /v1/sessions/{id}`로 연결을 해제한다. 연결 없이 2분(`VOA_SESSION_IDLE_S`)이 지난 세션은 서버가 정리한다. 아래 계정/비밀번호로 세션을 바로 만드는 방식도 장치 호환을 위해 남겨 둔다. 자세한 계약은 SPEC §7.1.
+
 - 착용자는 계정으로 세션을 만든다.
   - `POST /v1/sessions {username, password, device_label?, capabilities, mission_id?}`
   - `device_label`은 표시용이다(예: "현장 A 글래스 1"). 인증에는 쓰지 않는다.

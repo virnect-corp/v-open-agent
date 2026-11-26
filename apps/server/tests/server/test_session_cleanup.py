@@ -44,7 +44,8 @@ def workdir(tmp_path: Path) -> Path:
 
 def client(workdir: Path, mono: FakeMono, **env: str) -> TestClient:
     settings = Settings.from_env(
-        {"VOA_TOKEN_TTL_S": "60", "VOA_REFRESH_TOKEN_TTL_S": "600"}
+        # a long idle time isolates the refresh-expiry rule (ADR-0005); idle: TASK-47 tests
+        {"VOA_TOKEN_TTL_S": "60", "VOA_REFRESH_TOKEN_TTL_S": "600", "VOA_SESSION_IDLE_S": "100000"}
         | {f"VOA_{k}": v for k, v in env.items()},
         base_dir=workdir,
     )

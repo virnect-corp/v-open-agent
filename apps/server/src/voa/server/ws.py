@@ -199,6 +199,7 @@ def register_stream_routes(app: FastAPI) -> None:
             ),
         )
         runtime.connections[session_id] = websocket
+        runtime.idle_since.pop(session_id, None)  # TASK-47: connected, not idle
         heartbeat = asyncio.create_task(_heartbeat_loop(runtime, session_id, websocket))
         try:
             mission = runtime.mission_message(session_id)
@@ -211,6 +212,8 @@ def register_stream_routes(app: FastAPI) -> None:
             heartbeat.cancel()
             if runtime.connections.get(session_id) is websocket:
                 del runtime.connections[session_id]
+                if session_id in runtime.session_started:  # still a session: idle from now
+                    runtime.idle_since[session_id] = runtime.mono_ns()
             if websocket.application_state != WebSocketState.DISCONNECTED:
                 with contextlib.suppress(RuntimeError):
                     await websocket.close(code=CLOSE_UNAUTHORIZED)

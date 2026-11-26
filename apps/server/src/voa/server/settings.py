@@ -33,6 +33,7 @@ DEFAULTS: dict[str, str] = {
     "VOA_TOKEN_TTL_S": "900",
     "VOA_REFRESH_TOKEN_TTL_S": "86400",
     "VOA_SESSION_SWEEP_INTERVAL_S": "60",
+    "VOA_SESSION_IDLE_S": "120",
     "VOA_INPUT_QUEUE_MAX": "64",
     "VOA_METADATA_RETENTION_DAYS": "7",
     "VOA_RAW_MEDIA_STORAGE": "false",
@@ -78,6 +79,7 @@ class Settings:
     token_ttl_s: int
     refresh_token_ttl_s: int
     session_sweep_interval_s: int
+    session_idle_s: int  # TASK-47: a session without a control socket this long ends
     input_queue_max: int
     metadata_retention_days: int
     raw_media_storage: bool
@@ -133,6 +135,7 @@ class Settings:
             token_ttl_s=parse("VOA_TOKEN_TTL_S", int, 0),
             refresh_token_ttl_s=parse("VOA_REFRESH_TOKEN_TTL_S", int, 0),
             session_sweep_interval_s=parse("VOA_SESSION_SWEEP_INTERVAL_S", int, 0),
+            session_idle_s=parse("VOA_SESSION_IDLE_S", int, 0),
             input_queue_max=parse("VOA_INPUT_QUEUE_MAX", int, 0),
             metadata_retention_days=parse("VOA_METADATA_RETENTION_DAYS", int, 0),
             raw_media_storage=parse("VOA_RAW_MEDIA_STORAGE", _bool, True),
@@ -172,6 +175,8 @@ class Settings:
             bad.append("VOA_REFRESH_TOKEN_TTL_S")
         if self.session_sweep_interval_s <= 0:
             bad.append("VOA_SESSION_SWEEP_INTERVAL_S")
+        if self.session_idle_s <= 0:
+            bad.append("VOA_SESSION_IDLE_S")
         if self.input_queue_max < 1:
             bad.append("VOA_INPUT_QUEUE_MAX")
         if self.frame_max_bytes <= 0:
