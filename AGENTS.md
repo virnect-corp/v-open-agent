@@ -10,6 +10,7 @@
 - `docs/02-technical-specification.md` — 어떻게 만드는가. 스키마, 엔진 단계, 불변식(INV), 전이표
 - `docs/03-collaboration-architecture.md` — 모듈 경계, Lane 소유권, 허용 의존, 통합 순서
 - `docs/04-implementation-plan.md` — 어떤 순서로 만드는가. Task 목록과 상태
+- `docs/06-new-mission-guide.md` — 새 미션(감지 도메인)을 추가하는 순서. 데이터, 모델, 임계값, 미션 작성, 게시
 
 ## 반드시 지킬 규칙
 1. **증거 없는 사실 금지**: 모델 출력은 관측 후보일 뿐이다. 측정 근거 없이 거리(m)/속도/충돌 확률/신원/의도를 만들지 않는다.
