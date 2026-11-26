@@ -580,8 +580,8 @@ devices:
 | S→C | `auth_ok` | `session_id`, `server_time_utc` |
 | S→C | `admission` | `seq`, `stream_id`, `status` (accepted 외의 결과만 보낸다) |
 | S→C | `decision` | `decision`: RiskDecision 전체 (상태 표시용) |
-| S→C | `alert` | `alert_seq`(세션 내 1부터 증가), Alert, `risk_event_id`, `scenario_id` |
-| S→C | `notice` | `notice_id`, `kind: degraded`, `scenario_id`, `text` (§7.4 판단 불가 고지) |
+| S→C | `alert` | `alert_seq`(세션 내 1부터 증가), Alert, `risk_event_id`, `scenario_id`, `presentation`(§7.4 HUD 표시 규칙, ADR-0009) |
+| S→C | `notice` | `notice_id`, `kind: degraded`, `scenario_id`, `text`, `presentation` (§7.4 판단 불가 고지와 HUD 표시 규칙) |
 | S→C | `heartbeat` | `server_time_utc`, `states: {scenario_id: RiskState}`, `frames: {received, processed, skipped, rejected}` (`VOA_HEARTBEAT_MS`마다) |
 | S→C | `config` | `frame_interval_ms` (관리자가 바꾸면 진행 중인 세션에 즉시 보냄. 전송 속도 설정이며 판단 규칙이 아님) |
 | S→C | `frame_result` | §7.6 업로드 응답과 같은 본문. 업로드가 `202 accepted`였던 프레임의 결과 |
@@ -639,6 +639,42 @@ OutputCap = Literal["hud", "speaker", "haptic"]
 | `haptic` | 진동 패턴 A (장치 정의) | 진동 패턴 B |
 
 - Stage C0(ADR-0007)에서는 예외로 시뮬레이터가 로컬 프레임 폴더를 읽어 장치 쪽에서 detector Provider를 실행하고 기존 `observation` 메시지로 보낸다. 이 경로는 오프라인 평가와 회귀 테스트용으로 남는다. 제품 경로는 §7.6 프레임 업로드와 서버 추론이다(ADR-0009).
+
+**HUD 표시 규칙 (ADR-0009 결정 5)**: 글래스 앱과 시뮬 페이지는 `alert`/`notice`의 `presentation`을 같은 규칙으로 그린다. 장치마다 표시 방식을 따로 정하지 않는다.
+
+| 필드 | 값 | 규칙 |
+|---|---|---|
+| `style_id` | 문자열 | 관리자 설정 `hud_styles`의 ID |
+| `text` | 승인된 템플릿 문구 | `alert.text`/`notice.text`와 같다. 최대 `max_lines`줄, 넘으면 말줄임 |
+| `position` | `top_center` \| `center` \| `bottom_center` | 글래스 표시 영역 기준(안전 여백 5%) |
+| `text_size` | `normal` \| `large` | 장치가 정한 두 단계 글자 크기 |
+| `color` | `red` \| `yellow` \| `white` | 단색 HUD는 무시하고 반전 강조로 대신 |
+| `flash` | `{mode: none\|border\|full_screen, count, on_ms, off_ms}` | 지원하지 않는 mode는 `full_screen` → `border` → `none` 순서로 낮춘다 |
+| `show_ms` | 정수 | HUD 유지 시간. 다음 alert나 `valid_until_utc`가 먼저 오면 그때 지운다 |
+| `speech` | bool | `speaker` 출력이 있으면 `text`를 TTS로 읽는다 |
+| `haptic` | `none` \| `pattern_a` \| `pattern_b` | `haptic` 출력이 있을 때만 |
+
+- 장치는 세션 생성 시 `capabilities.hud: {color: bool, flash_modes: [...], max_lines: int}`를 선언할 수 있다. 선언하지 않으면 최소값(`color=false`, `flash_modes=["none"]`, `max_lines=2`)으로 본다. 서버는 `presentation`을 그대로 보내고, 축소는 장치가 위 규칙으로 한다(같은 메시지가 모든 기종에 간다).
+- 기본 스타일: `attention_default` = `red`, `top_center`, `large`, `full_screen` 3회(200/200 ms), `show_ms` 4000, 음성, `pattern_a`. `degraded_default` = `yellow`, `top_center`, `normal`, `border` 1회, `show_ms` 3000, 음성, `pattern_b`.
+- 스타일 선택: 관리자 설정 `hud_style_map`에서 `scenario_id` 항목, 없으면 `severity` 항목(notice는 `degraded`), 없으면 기본 스타일 순으로 고른다.
+- `played` ACK는 HUD 표시가 시작된 시점이다. 깜빡임이 끝나기를 기다리지 않는다.
+- 시뮬 페이지는 영상 위에 글래스 표시 영역 비율의 HUD 레이어를 이 규칙으로 그린다. 탐지 박스는 시뮬 화면에서만 켜는 디버그 레이어이고 글래스 HUD에는 그리지 않는다.
+
+**HUD 상태 표시줄 (ADR-0009 결정 5)**: 경고 팝업과 별개로, HUD 한쪽(기본 `top_right`)에 작은 표시 하나를 항상 둔다. 사용자가 연결, 서버 응답, 감지 상태를 한눈에 알 수 있게 한다. 장치가 자기가 가진 정보만으로 정하고, 글래스와 시뮬 페이지는 같은 규칙을 쓴다. 여러 조건이 겹치면 **위쪽 행이 우선**한다.
+
+| 우선 | 상태 | 조건 (장치가 판단) | 표시 (색 / 문구) | 음성 |
+|---|---|---|---|---|
+| 1 | 연결 끊김 | 제어 WebSocket이 끊겼거나 `watchdog_ms` 동안 서버 메시지가 없음 | 회색 / "연결 끊김" | 끊긴 순간 내장 문구 1회(기존 watchdog 규칙) |
+| 2 | 서버 오류 | 프레임 업로드가 연속 3회 실패(5xx, 401, 503 `no_model_deployed`, 연결 오류). `409 frame_busy`는 오류로 세지 않음 | 빨강 테두리 / "서버 오류" | 없음 |
+| 3 | 응답 지연 | 마지막 업로드 응답 이후 `2 × frame_interval_ms + VOA_FRAME_SYNC_TIMEOUT_MS` 동안 응답(200, 202, `frame_result`)이 없음 | 노랑 / "응답 지연" | 없음 |
+| 4 | 경고 | 어느 시나리오든 `warning` | 빨강 / "경고" | 경고 팝업과 음성은 `alert` `presentation`이 담당 |
+| 5 | 판단 불가 | 어느 시나리오든 `unknown` | 회색 / "판단 불가" | `notice`가 오면 그 `presentation`대로 |
+| 6 | 확인 중 | 어느 시나리오든 `candidate` | 노랑 점 / "확인 중" | 없음 |
+| 7 | 정상 | 모든 시나리오가 `clear` 또는 `resolved` | 초록 점 / "정상" | 없음 |
+
+- 시나리오 상태는 가장 최근에 받은 것을 쓴다(업로드 응답의 `states` 또는 `heartbeat.states`). 연결 끊김과 서버 오류일 때는 감지 상태를 표시하지 않는다. 받지 못한 상태를 정상으로 보이게 하지 않기 위해서다(AGENTS 규칙 3).
+- 상태가 바뀌어도 상태 표시줄은 깜빡이거나 음성을 내지 않는다. 사용자 주의를 끄는 것은 `alert`와 `notice`, 그리고 연결이 끊긴 순간의 내장 문구뿐이다.
+- 단색 HUD는 색 대신 문구와 아이콘 모양으로 구분한다. 시뮬 페이지는 같은 표시줄을 HUD 레이어에 그리고, 마지막 응답의 `timing`(왕복 지연, 추론 시간)을 개발용 패널에 따로 보여준다.
 
 - **TTS는 장치에서 한다.** 서버는 텍스트만 보내고 오디오는 생성하지 않는다(서버 TTS는 MVP 범위 밖).
 - **ACK 정의**
@@ -745,7 +781,7 @@ OutputCap = Literal["hud", "speaker", "haptic"]
 | `GET /v1/admin/profile` | 활성 profile(§4.9 스키마)과 `profile_version` |
 | `POST /v1/admin/profile:validate` | 저장하지 않고 검증만 한다 |
 | `PUT /v1/admin/profile` | 검증 후 `profile_version`을 올려 `VOA_ACTIVE_CONFIG_DIR`에 저장한다. **새로 시작하는 세션부터 적용**한다. 진행 중인 세션은 시작할 때의 profile로 끝까지 판단한다 |
-| `GET /v1/admin/settings`, `PUT /v1/admin/settings` `{frame_interval_ms}` | 전송 설정. 범위는 100~5000이다. 진행 중인 세션에도 `config` 메시지로 즉시 알린다 |
+| `GET /v1/admin/settings`, `PUT /v1/admin/settings` `{frame_interval_ms, hud_styles, hud_style_map}` | 전송과 표시 설정. `frame_interval_ms` 범위는 100~5000이고 진행 중인 세션에도 `config` 메시지로 즉시 알린다. HUD 스타일(§7.4)은 다음 alert부터 적용한다 |
 | `POST /v1/admin/detect?model_id=` (본문 JPEG 1장) | 엔진을 거치지 않고 탐지 결과만 돌려준다. 이미지는 저장하지 않는다 |
 | `GET /v1/admin/changes` | 변경 기록(§8.1 `admin_changes`) |
 
