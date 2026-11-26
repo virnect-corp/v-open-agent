@@ -83,6 +83,7 @@ class ModelPool:
     _detectors: dict[str, Detector] = field(default_factory=dict)
     _locks: dict[str, asyncio.Lock] = field(default_factory=dict)
     _guard: threading.Lock = field(default_factory=threading.Lock)
+    _loading: dict[str, threading.Lock] = field(default_factory=dict)
     _recent: dict[str, deque[int]] = field(default_factory=dict)
     deployments: dict[str, Deployment] = field(default_factory=dict)
     _weights_cache: dict[str, tuple[tuple[int, int], WeightsStatus]] = field(default_factory=dict)
@@ -106,21 +107,33 @@ class ModelPool:
         return counts
 
     def detector(self, model_id: str) -> Detector:
-        """Load once (blocking: call from a worker thread)."""
+        """Load once (blocking: call from a worker thread).
+
+        One load per model at a time (TASK-48): when the mission warm-up and the first
+        frame ask together, the later caller waits for the load in progress and gets its
+        result instead of loading the model a second time. A failed load is not cached,
+        so the next caller tries again. Different models load in parallel.
+        """
         with self._guard:
             found = self._detectors.get(model_id)
+            loading = self._loading.setdefault(model_id, threading.Lock())
         if found is not None:
             return found
         manifest = self.manifests.get(model_id)
         if manifest is None or manifest.kind != "object_detection":
             raise ModelUnavailable(model_id)
-        try:
-            loaded = self.factory(manifest, self.weights_root)
-        except (WeightsError, VisionUnavailable, ValueError, OSError) as error:
-            raise ModelUnavailable(model_id) from error
-        with self._guard:
-            self.deployments.setdefault(model_id, Deployment())  # loaded = deployed
-            return self._detectors.setdefault(model_id, loaded)
+        with loading:
+            with self._guard:
+                found = self._detectors.get(model_id)
+            if found is not None:
+                return found  # loaded by the caller we waited for
+            try:
+                loaded = self.factory(manifest, self.weights_root)
+            except (WeightsError, VisionUnavailable, ValueError, OSError) as error:
+                raise ModelUnavailable(model_id) from error
+            with self._guard:
+                self.deployments.setdefault(model_id, Deployment())  # loaded = deployed
+                return self._detectors.setdefault(model_id, loaded)
 
     def deploy(self, model_id: str, deployment: Deployment) -> None:
         """Load (blocking: call from a worker thread) and record the deployment settings."""
