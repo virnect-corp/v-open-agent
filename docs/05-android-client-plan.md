@@ -212,6 +212,12 @@ STOPPED
 - 산출물: 미션 선택 화면(`GET /v1/missions`, `PUT .../mission`), 감지 화면의 CameraX 미리보기, `FrameUploader`(긴 변 640px JPEG, 진행 중 1개, `frame_interval_ms`와 `config`/`mission` 반영, `auth_ok`와 미션 확정 전에는 0건, 202 후 `frame_result`)
 - 수용: 연결 전 업로드 0건, 간격과 진행 중 1개, 409 `frame_busy`는 오류 아님, 연속 3회 실패 집계, 프레임이 파일과 캐시에 남지 않음
 
+### AND-03A: 로그인과 연결 분리 반영
+
+- 선행: AND-03, TASK-47
+- 산출물: 로그인은 `/v1/auth/login`(로그인 token만, 정원 차지 안 함), 미션 목록은 로그인 token, 미션을 고르면 `POST /v1/sessions`(로그인 token + `mission_id`)로 연결, 감지 화면을 나가면 `DELETE /v1/sessions/{id}`로 해제, 서버가 끝낸 세션은 미션 화면으로
+- 수용: 시뮬 페이지와 같은 시나리오(미션 화면 정원 0, 선택 시 1, 미션 변경 시 0)
+
 ### AND-04: HUD 출력, 상태 표시줄, ACK
 
 - 선행: AND-03, TASK-44B

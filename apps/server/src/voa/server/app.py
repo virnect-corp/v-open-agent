@@ -18,7 +18,7 @@ from typing import Literal
 
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from voa.config.missions import MissionStore, MissionVersion
 from voa.config.model_registry import check_profile_models, load_manifests
@@ -139,6 +139,8 @@ class ServerRuntime:
     default_mission: MissionVersion | None = None
     session_missions: dict[str, MissionVersion] = field(default_factory=dict)
     session_started: dict[str, tuple[str, datetime, str | None]] = field(default_factory=dict)
+    # TASK-47: when each session lost (or never had) its control socket
+    idle_since: dict[str, int] = field(default_factory=dict)
     models: ModelPool = field(default_factory=lambda: ModelPool({}, Path(".")))
     frame_states: dict[str, FrameState] = field(default_factory=dict)
     admin_settings: AdminSettings | None = None  # None = the defaults from VOA_* settings
@@ -356,6 +358,7 @@ class ServerRuntime:
         self._stop_stream(session_id)
         self.session_missions.pop(session_id, None)
         self.frame_states.pop(session_id, None)
+        self.idle_since.pop(session_id, None)
         started = self.session_started.pop(session_id, None)
         self.sessions.remove(session_id)
         if started is not None and self.store is not None:
@@ -369,12 +372,16 @@ class ServerRuntime:
             )
 
     def sweep_sessions(self, now_mono_ns: int) -> list[str]:
-        """ADR-0005: end sessions that are disconnected and can no longer be refreshed."""
-        ended = [
+        """End sessions without a control socket that can no longer be refreshed (ADR-0005)
+        or have had none for `VOA_SESSION_IDLE_S` (TASK-47: a crashed app frees its slot)."""
+        idle_ns = self.settings.session_idle_s * 1_000_000_000
+        expired = set(self.sessions.refresh_expired(now_mono_ns))
+        expired |= {
             session_id
-            for session_id in self.sessions.refresh_expired(now_mono_ns)
-            if session_id not in self.connections
-        ]
+            for session_id, since in self.idle_since.items()
+            if now_mono_ns - since >= idle_ns
+        }
+        ended = sorted(session_id for session_id in expired if session_id not in self.connections)
         for session_id in ended:
             self.end_session(session_id, now_mono_ns)
         return ended
@@ -521,6 +528,7 @@ def create_app(
         runtime: ServerRuntime = request.app.state.runtime
         if runtime.not_ready_code() is not None:
             return _error(503, "not_ready")
+        runtime.sweep_sessions(runtime.mono_ns())  # free idle slots before counting (TASK-47)
         if runtime.sessions.count() >= runtime.settings.max_sessions:  # ADR-0010
             return JSONResponse(
                 runtime.capacity_body(),
@@ -545,17 +553,17 @@ def create_app(
             user_id = str(user["user_id"])
             allowed: tuple[frozenset[str], frozenset[str]] | None = (ALL_INPUTS, ALL_OUTPUTS)
         elif body.device_id is None:
-            # The admin page hands its login token to the sim window it opened (TASK-46A):
-            # `Authorization: Bearer <admin login token>` and no credentials in the body.
+            # A logged-in account connects (TASK-47; TASK-46A for admins):
+            # `Authorization: Bearer <login token>` and no credentials in the body.
             if _bearer(request) is None:
                 return _error(400, "invalid_request")
             login = _login(runtime, request)
-            if login is None or login.role != "admin" or runtime.store is None:
+            if login is None or runtime.store is None:
                 return _error(401, "unauthorized")
-            admin = runtime.store.get_user(login.user_id)
-            if admin is None or admin["status"] != "active":
+            account = runtime.store.get_user(login.user_id)
+            if account is None or account["status"] != "active":
                 return _error(401, "unauthorized")
-            if admin["password_change_required"]:
+            if account["password_change_required"]:
                 return _error(403, "password_change_required")
             user_id = login.user_id
             allowed = (ALL_INPUTS, ALL_OUTPUTS)
@@ -584,6 +592,7 @@ def create_app(
         session, tokens = runtime.sessions.create(device_id, caps, now, user_id=user_id)
         started_at = runtime.clock.at(now)
         runtime.session_started[session.session_id] = (session.device_id, started_at, user_id)
+        runtime.idle_since[session.session_id] = now  # until its control socket connects
         if runtime.store is not None:
             runtime.store.save_session(
                 session_id=session.session_id,
@@ -616,6 +625,27 @@ def create_app(
         pair = TokenPair.model_validate(_token_pair(runtime, tokens))
         return JSONResponse(pair.model_dump(mode="json"))
 
+    @app.delete("/v1/sessions/{session_id}")
+    async def disconnect_session(request: Request, session_id: str) -> Response:
+        """Disconnect (TASK-47): the device leaves detection and gives its slot back.
+
+        The session token is required; the control socket closes with 1000 and the
+        session ends (ended_at_utc is recorded). The login stays valid.
+        """
+        runtime: ServerRuntime = request.app.state.runtime
+        now = runtime.mono_ns()
+        owner = _bearer_session(runtime, request, now)
+        if owner is None:
+            return _error(401, "unauthorized")
+        if owner != session_id:
+            return _error(404, "not_found")
+        websocket = runtime.connections.pop(session_id, None)
+        if websocket is not None:
+            with contextlib.suppress(RuntimeError):
+                await websocket.close(code=1000)
+        runtime.end_session(session_id, now)
+        return Response(status_code=204)
+
     @app.get("/v1/sessions/{session_id}/status")
     async def session_status(request: Request, session_id: str) -> JSONResponse:
         runtime: ServerRuntime = request.app.state.runtime
@@ -647,7 +677,11 @@ def create_app(
     @app.get("/v1/missions")
     async def list_missions(request: Request) -> JSONResponse:
         runtime: ServerRuntime = request.app.state.runtime
-        if _bearer_session(runtime, request, runtime.mono_ns()) is None:
+        # A session token, or a login token before connecting (TASK-47)
+        if (
+            _bearer_session(runtime, request, runtime.mono_ns()) is None
+            and _login(runtime, request) is None
+        ):
             return _error(401, "unauthorized")
         assert runtime.missions is not None
         found = []
