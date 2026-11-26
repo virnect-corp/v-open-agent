@@ -36,6 +36,8 @@ DEFAULTS: dict[str, str] = {
     "VOA_RAW_MEDIA_STORAGE": "false",
     "VOA_EXTERNAL_NETWORK": "false",
     "VOA_MODEL_AUTO_DOWNLOAD": "false",
+    "VOA_SIGNUP_ENABLED": "true",
+    "VOA_SIGNUP_REQUIRES_APPROVAL": "true",
 }
 LOOPBACK = "127.0.0.1"
 Exposure = Literal["loopback", "network"]
@@ -72,6 +74,8 @@ class Settings:
     raw_media_storage: bool
     external_network: bool
     model_auto_download: bool
+    signup_enabled: bool = True  # ADR-0011
+    signup_requires_approval: bool = True
 
     @classmethod
     def from_env(cls, env: Mapping[str, str], *, base_dir: Path) -> "Settings":
@@ -118,6 +122,8 @@ class Settings:
             raw_media_storage=parse("VOA_RAW_MEDIA_STORAGE", _bool, True),
             external_network=parse("VOA_EXTERNAL_NETWORK", _bool, True),
             model_auto_download=parse("VOA_MODEL_AUTO_DOWNLOAD", _bool, True),
+            signup_enabled=parse("VOA_SIGNUP_ENABLED", _bool, True),
+            signup_requires_approval=parse("VOA_SIGNUP_REQUIRES_APPROVAL", _bool, True),
         )
         bad += settings._violations()
         if bad:
