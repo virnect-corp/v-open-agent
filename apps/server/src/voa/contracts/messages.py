@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, RootModel
 
 from voa.contracts.decision import Alert, RiskDecision
 from voa.contracts.enums import RiskState
-from voa.contracts.observation import ObservationDraft
+from voa.contracts.observation import Detection, ObservationDraft
 from voa.contracts.types import MODEL_CONFIG, Id, UtcDatetime
 
 # Admission results other than "accepted" (mirrors voa.engine.admission.AdmissionStatus;
@@ -104,11 +104,58 @@ class NoticeMessage(BaseModel):
     text: str = Field(min_length=1)
 
 
+class FrameCounters(BaseModel):
+    """Frame uploads seen in this session (SPEC 7.6)."""
+
+    model_config = MODEL_CONFIG
+    received: int = 0
+    processed: int = 0
+    skipped: int = 0  # 409 frame_busy
+    rejected: int = 0  # 4xx other than busy
+
+
 class HeartbeatMessage(BaseModel):
     model_config = MODEL_CONFIG
     type: Literal["heartbeat"] = "heartbeat"
     server_time_utc: UtcDatetime
     states: dict[str, RiskState]
+    frames: FrameCounters | None = None
+
+
+class FrameModelResult(BaseModel):
+    model_config = MODEL_CONFIG
+    model_id: Id
+    observation_id: Id  # the same ID a warning lists in `evidence_ids`
+    detections: list[Detection]
+
+
+class FrameTiming(BaseModel):
+    """Device capture time echoed back; the rest is server time (never subtract the two)."""
+
+    model_config = MODEL_CONFIG
+    capture_ts_monotonic_ns: int
+    received_at_utc: UtcDatetime
+    processing_started_at_utc: UtcDatetime
+    completed_at_utc: UtcDatetime
+    queue_ms: float
+    provider_ms: float
+    engine_us: int
+
+
+class FrameResult(BaseModel):
+    """Body of a 200 frame upload and of `frame_result` (SPEC 7.6, ADR-0009)."""
+
+    model_config = MODEL_CONFIG
+    frame_id: Id
+    seq: int = Field(ge=0)
+    status: Literal["processed"] = "processed"
+    results: list[FrameModelResult]
+    states: dict[str, RiskState]
+    timing: FrameTiming
+
+
+class FrameResultMessage(FrameResult):
+    type: Literal["frame_result"] = "frame_result"
 
 
 class MissionMessage(BaseModel):
@@ -138,6 +185,7 @@ ServerMessage = Annotated[
     | NoticeMessage
     | HeartbeatMessage
     | MissionMessage
+    | FrameResultMessage
     | ErrorMessage,
     Field(discriminator="type"),
 ]

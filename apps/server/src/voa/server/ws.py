@@ -65,6 +65,16 @@ async def _send(websocket: WebSocket, message: BaseModel) -> None:
     await websocket.send_text(message.model_dump_json())
 
 
+async def push_messages(
+    runtime: "ServerRuntime",
+    stream: SessionStream,
+    websocket: WebSocket,
+    messages: Sequence[BaseModel],
+) -> None:
+    """Public entry for other routes (frame uploads, SPEC 7.6)."""
+    await _push(runtime, stream, websocket, messages)
+
+
 async def _push(
     runtime: "ServerRuntime",
     stream: SessionStream,
@@ -111,9 +121,11 @@ async def _heartbeat_loop(runtime: "ServerRuntime", session_id: str, websocket: 
         while True:
             await asyncio.sleep(interval)
             stream = runtime.streams.get(session_id)  # replaced when the mission changes
+            frames = runtime.frame_states.get(session_id)
             beat = HeartbeatMessage(
                 server_time_utc=runtime.clock.at(runtime.mono_ns()),
                 states=dict(stream.engine.states()) if stream is not None else {},
+                frames=frames.snapshot() if frames is not None else None,
             )
             await _send(websocket, beat)
 

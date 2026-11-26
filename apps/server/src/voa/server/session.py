@@ -43,6 +43,7 @@ class SessionStream:
     warning_ttl_ms: int
     degraded_notice_text: str
     input: InputQueue
+    profile: PolicyProfile
     last_received_mono_ns: dict[str, int] = field(default_factory=dict)
     dispatcher: AlertDispatcher = field(default_factory=AlertDispatcher)
     notices: NoticeTracker = field(default_factory=NoticeTracker)
@@ -77,6 +78,7 @@ class SessionStream:
             warning_ttl_ms=profile.params.warning_ttl_ms,
             degraded_notice_text=profile.degraded_notice_text,
             input=InputQueue(input_queue_max),
+            profile=profile,
         )
         stream._inject_undeclared(profile, now_mono_ns)
         return stream
@@ -113,6 +115,16 @@ class SessionStream:
         received_mono_ns: int | None = None,
     ) -> list[PushMessage]:
         """`received_mono_ns` is the queue entry time, so queueing delay counts as age."""
+        return self.ingest_with_id(draft, now_mono_ns, received_mono_ns=received_mono_ns)[1]
+
+    def ingest_with_id(
+        self,
+        draft: ObservationDraft,
+        now_mono_ns: int,
+        *,
+        received_mono_ns: int | None = None,
+    ) -> tuple[str, list[PushMessage]]:
+        """Like `ingest`, plus the new observation's ID (frame upload results, SPEC 7.6)."""
         received = now_mono_ns if received_mono_ns is None else received_mono_ns
         observation = self._observation(draft, received)
         result = self.engine.step(observation, now_mono_ns)
@@ -128,7 +140,7 @@ class SessionStream:
                 )
             )
         messages += self._decisions(result.decisions, now_mono_ns)
-        return messages
+        return observation.observation_id, messages
 
     def tick(self, now_mono_ns: int) -> list[PushMessage]:
         messages = self._decisions(self.engine.tick(now_mono_ns), now_mono_ns)

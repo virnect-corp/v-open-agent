@@ -98,6 +98,7 @@ def test_create_session_issues_tokens_and_records_session(workdir: Path) -> None
         "heartbeat_ms",
         "watchdog_ms",
         "mission",  # ADR-0010: the default mission (indoor_research_v0 v1)
+        "frame_interval_ms",  # SPEC 7.6
     }
     assert data["mission"] == {
         "mission_id": "indoor_research_v0",

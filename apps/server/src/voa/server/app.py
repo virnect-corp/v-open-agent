@@ -52,6 +52,8 @@ from voa.server.auth import (
     authenticate_device,
 )
 from voa.server.devices import DeviceConfig, load_devices
+from voa.server.frames import FrameState, register_frame_routes
+from voa.server.inference import DetectorFactory, ModelPool, ModelUnavailable, default_factory
 from voa.server.logconfig import pin_log_levels
 from voa.server.runtime import AnchoredUtcClock, SecureIdFactory
 from voa.server.session import SessionStream
@@ -125,6 +127,8 @@ class ServerRuntime:
     default_mission: MissionVersion | None = None
     session_missions: dict[str, MissionVersion] = field(default_factory=dict)
     session_started: dict[str, tuple[str, datetime, str | None]] = field(default_factory=dict)
+    models: ModelPool = field(default_factory=lambda: ModelPool({}, Path(".")))
+    frame_states: dict[str, FrameState] = field(default_factory=dict)
     streams: dict[str, SessionStream] = field(default_factory=dict)
     connections: dict[str, WebSocket] = field(default_factory=dict)
     tick_tasks: dict[str, "asyncio.Task[None]"] = field(default_factory=dict)
@@ -133,7 +137,10 @@ class ServerRuntime:
 
     @classmethod
     def build(
-        cls, settings: Settings, mono_ns: Callable[[], int] = time.monotonic_ns
+        cls,
+        settings: Settings,
+        mono_ns: Callable[[], int] = time.monotonic_ns,
+        detector_factory: DetectorFactory = default_factory,
     ) -> "ServerRuntime":
         try:
             store: SQLiteStore | None = SQLiteStore(settings.db_path)
@@ -147,9 +154,16 @@ class ServerRuntime:
         profile: PolicyProfile | ProfileError | None = (
             mission.profile if isinstance(mission, MissionVersion) else mission
         )
+        manifests = load_manifests(settings.models_dir)
+        pool = ModelPool(
+            manifests if isinstance(manifests, dict) else {},
+            settings.model_weights_dir,
+            detector_factory,
+        )
         return cls(
             settings=settings,
             profile=profile,
+            models=pool,
             missions=missions,
             default_mission=mission if isinstance(mission, MissionVersion) else None,
             store=store,
@@ -206,7 +220,20 @@ class ServerRuntime:
         self.session_missions[session_id] = mission
         self.tick_tasks[session_id] = asyncio.create_task(tick_loop(self, stream))
         self.input_tasks[session_id] = asyncio.create_task(input_loop(self, stream))
+        self._warm_up(mission)
         return stream
+
+    def _warm_up(self, mission: MissionVersion) -> None:
+        """Load the mission's detectors in the background so the first frame is not slow."""
+        for scenario in mission.profile.scenarios:
+            model_id = scenario.required_models.get("object_detection")
+            if model_id is not None and model_id in self.models.manifests:
+                task = asyncio.create_task(asyncio.to_thread(self._try_load, model_id))
+                self.background.append(task)
+
+    def _try_load(self, model_id: str) -> None:
+        with contextlib.suppress(ModelUnavailable):
+            self.models.detector(model_id)
 
     def mission_message(self, session_id: str) -> MissionMessage | None:
         mission = self.session_missions.get(session_id)
@@ -227,6 +254,7 @@ class ServerRuntime:
         """Stop the loops, forget engine and token digests, record ended_at_utc."""
         self._stop_stream(session_id)
         self.session_missions.pop(session_id, None)
+        self.frame_states.pop(session_id, None)
         started = self.session_started.pop(session_id, None)
         self.sessions.remove(session_id)
         if started is not None and self.store is not None:
@@ -336,11 +364,12 @@ def create_app(
     load_settings: Callable[[], Settings] = settings_from_environment,
     *,
     mono_ns: Callable[[], int] = time.monotonic_ns,
+    detector_factory: DetectorFactory = default_factory,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         pin_log_levels()  # no DEBUG frame dumps, however uvicorn was started (DAT-02)
-        runtime = ServerRuntime.build(load_settings(), mono_ns)
+        runtime = ServerRuntime.build(load_settings(), mono_ns, detector_factory)
         if runtime.accounts is not None:
             runtime.accounts.ensure_admin(runtime.clock.at(runtime.mono_ns()))
             exposed = runtime.settings.exposure == "network"
@@ -447,6 +476,7 @@ def create_app(
                 **_token_pair(runtime, tokens),
                 "heartbeat_ms": runtime.settings.heartbeat_ms,
                 "watchdog_ms": runtime.settings.client_watchdog_ms,
+                "frame_interval_ms": runtime.settings.frame_interval_ms,
                 "mission": _mission_ref(mission),
             }
         )
@@ -640,6 +670,7 @@ def create_app(
         return JSONResponse({"user_id": user_id, "temporary_password": temporary})
 
     register_stream_routes(app)
+    register_frame_routes(app)
     return app
 
 
