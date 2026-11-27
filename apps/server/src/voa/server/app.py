@@ -175,6 +175,7 @@ class ServerRuntime:
             manifests if isinstance(manifests, dict) else {},
             settings.model_weights_dir,
             detector_factory,
+            default_device="cuda" if settings.inference_device == "cuda" else "cpu",
         )
         settings_store = SettingsStore(settings.active_config_dir, settings.frame_interval_ms)
         admin_settings, settings_valid = settings_store.load()

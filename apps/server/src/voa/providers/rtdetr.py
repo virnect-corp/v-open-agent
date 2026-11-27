@@ -150,9 +150,13 @@ def verify_weights(model_id: str, sha256: str | None, weights_root: Path) -> Pat
 
 
 class TransformersRtDetr:
-    """RTDetrForObjectDetection on CPU via the official image processor."""
+    """RTDetrForObjectDetection via the official image processor, on CPU or one CUDA GPU.
 
-    def __init__(self, folder: Path, score_floor: float) -> None:
+    `device="cuda"` needs a CUDA build of torch and a visible GPU (TASK-50, server-cuda
+    image); otherwise VisionUnavailable. Pre- and post-processing stay on the CPU.
+    """
+
+    def __init__(self, folder: Path, score_floor: float, device: str = "cpu") -> None:
         try:
             import torch
             from transformers import RTDetrForObjectDetection, RTDetrImageProcessor
@@ -160,18 +164,27 @@ class TransformersRtDetr:
             raise VisionUnavailable(
                 "RT-DETR needs the optional 'vision' dependencies (run in scripts/vision.sh)"
             ) from error
+        if device not in ("cpu", "cuda"):
+            raise ValueError("device must be cpu or cuda")
+        if device == "cuda" and not torch.cuda.is_available():
+            raise VisionUnavailable("CUDA was requested but no GPU is visible to torch")
         self._torch = torch
+        self._device = device
         self._processor = RTDetrImageProcessor.from_pretrained(folder, local_files_only=True)
         self._model = RTDetrForObjectDetection.from_pretrained(folder, local_files_only=True)
+        self._model.to(device)
         self._model.eval()
         self._score_floor = score_floor
 
     def detect(self, image: Any) -> tuple[int, int, list[RawDetection]]:
         width, height = image.size
         torch = self._torch
-        inputs = self._processor(images=image, return_tensors="pt")
+        inputs = self._processor(images=image, return_tensors="pt").to(self._device)
         with torch.inference_mode():
             outputs = self._model(**inputs)
+            if self._device != "cpu":
+                outputs.logits = outputs.logits.cpu()
+                outputs.pred_boxes = outputs.pred_boxes.cpu()
         [result] = self._processor.post_process_object_detection(
             outputs, target_sizes=torch.tensor([(height, width)]), threshold=self._score_floor
         )

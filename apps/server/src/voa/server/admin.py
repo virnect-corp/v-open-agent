@@ -67,6 +67,11 @@ class SettingsRequest(BaseModel):
     hud_style_map: dict[str, str] | None = None
 
 
+def _no_gpu(error: ModelUnavailable) -> bool:
+    cause = error.__cause__
+    return cause is not None and type(cause).__name__ == "VisionUnavailable"
+
+
 def models_in_use(runtime: "ServerRuntime") -> dict[str, list[str]]:
     """model_id -> missions needing it: latest published versions and running sessions."""
     used: dict[str, set[str]] = {}
@@ -366,15 +371,18 @@ def register_admin_routes(app: FastAPI) -> None:
         if manifest.kind != "object_detection":
             record(runtime, "model_deploy", body.model_id, "model_not_servable")
             return _error(400, "model_not_servable")  # trackers do not run server-side yet
-        if body.device == "cuda":
-            record(runtime, "model_deploy", body.model_id, "device_unavailable")
-            return _error(400, "device_unavailable")  # GPU placement is not implemented yet
         deployment = Deployment(device=body.device, score_floor=body.score_floor)
         try:
             await asyncio.to_thread(runtime.models.deploy, body.model_id, deployment)
-        except ModelUnavailable:
-            record(runtime, "model_deploy", body.model_id, "model_not_ready")
-            return _error(400, "model_not_ready")
+        except ModelUnavailable as error:
+            # a GPU that torch cannot see (or a CPU-only image) is not a weights problem
+            code = (
+                "device_unavailable"
+                if body.device == "cuda" and _no_gpu(error)
+                else "model_not_ready"
+            )
+            record(runtime, "model_deploy", body.model_id, code)
+            return _error(400, code)
         record(runtime, "model_deploy", body.model_id, "ok")
         return JSONResponse(
             {"model_id": body.model_id, "deployed": True, **deployment.__dict__}, status_code=201

@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from starlette.testclient import WebSocketTestSession
 
 from voa.config.model_registry import ModelManifest
-from voa.providers.rtdetr import RawDetection, WeightsError
+from voa.providers.rtdetr import RawDetection, VisionUnavailable, WeightsError
 from voa.server.app import create_app
 from voa.server.settings import Settings
 
@@ -51,7 +51,9 @@ class FakeDetector:
         return 640, 360, found
 
 
-def factory(manifest: ModelManifest, weights_root: Path) -> FakeDetector:
+def factory(manifest: ModelManifest, weights_root: Path, device: str = "cpu") -> FakeDetector:
+    if device == "cuda":  # like the dev image: torch sees no GPU (TASK-50)
+        raise VisionUnavailable("no GPU in tests")
     if b"broken" in manifest.model_id.encode():
         raise WeightsError("missing")
     return FakeDetector(manifest.model_id)

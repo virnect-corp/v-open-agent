@@ -39,7 +39,7 @@ class Deployment:
 
 
 class DetectorFactory(Protocol):
-    def __call__(self, manifest: ModelManifest, weights_root: Path) -> Detector: ...
+    def __call__(self, manifest: ModelManifest, weights_root: Path, device: Device) -> Detector: ...
 
 
 class NullDetector:
@@ -60,14 +60,19 @@ class DecodingDetector:
         return self.inner.detect(self.decode(image))
 
 
-def default_factory(manifest: ModelManifest, weights_root: Path) -> Detector:
-    """Builtin -> NullDetector; file weights -> verified local weights (never downloaded)."""
+def default_factory(
+    manifest: ModelManifest, weights_root: Path, device: Device = "cpu"
+) -> Detector:
+    """Builtin -> NullDetector; file weights -> verified local weights (never downloaded).
+
+    `device="cuda"` places the model on the GPU (TASK-50, server-cuda image).
+    """
     if manifest.weights == "builtin":
         return NullDetector()
     from voa.providers.detectors import load_detector
     from voa.simulator.frames import pillow_decode
 
-    provider = load_detector(manifest, weights_root, score_floor=0.0)
+    provider = load_detector(manifest, weights_root, score_floor=0.0, device=device)
     return DecodingDetector(provider.detector, pillow_decode)
 
 
@@ -80,6 +85,7 @@ class ModelPool:
     manifests: dict[str, ModelManifest]
     weights_root: Path
     factory: DetectorFactory = default_factory
+    default_device: Device = "cpu"  # VOA_INFERENCE_DEVICE: where lazily loaded models go
     _detectors: dict[str, Detector] = field(default_factory=dict)
     _locks: dict[str, asyncio.Lock] = field(default_factory=dict)
     _guard: threading.Lock = field(default_factory=threading.Lock)
@@ -106,7 +112,7 @@ class ModelPool:
             counts[model_id] = len(times)
         return counts
 
-    def detector(self, model_id: str) -> Detector:
+    def detector(self, model_id: str, device: Device | None = None) -> Detector:
         """Load once (blocking: call from a worker thread).
 
         One load per model at a time (TASK-48): when the mission warm-up and the first
@@ -117,7 +123,9 @@ class ModelPool:
         with self._guard:
             found = self._detectors.get(model_id)
             loading = self._loading.setdefault(model_id, threading.Lock())
-        if found is not None:
+            placed = self.deployments.get(model_id)
+        want = device or (placed.device if placed else self.default_device)
+        if found is not None and (placed is None or placed.device == want):
             return found
         manifest = self.manifests.get(model_id)
         if manifest is None or manifest.kind != "object_detection":
@@ -125,19 +133,25 @@ class ModelPool:
         with loading:
             with self._guard:
                 found = self._detectors.get(model_id)
-            if found is not None:
+                placed = self.deployments.get(model_id)
+            if found is not None and (placed is None or placed.device == want):
                 return found  # loaded by the caller we waited for
             try:
-                loaded = self.factory(manifest, self.weights_root)
+                loaded = self.factory(manifest, self.weights_root, want)
             except (WeightsError, VisionUnavailable, ValueError, OSError) as error:
                 raise ModelUnavailable(model_id) from error
             with self._guard:
-                self.deployments.setdefault(model_id, Deployment())  # loaded = deployed
-                return self._detectors.setdefault(model_id, loaded)
+                previous = self.deployments.get(model_id)
+                self.deployments[model_id] = Deployment(
+                    device=want,
+                    score_floor=previous.score_floor if previous else DEFAULT_SCORE_FLOOR,
+                )
+                self._detectors[model_id] = loaded  # moved to another device: replaced
+                return loaded
 
     def deploy(self, model_id: str, deployment: Deployment) -> None:
-        """Load (blocking: call from a worker thread) and record the deployment settings."""
-        self.detector(model_id)
+        """Load on the requested device (blocking: worker thread) and record the settings."""
+        self.detector(model_id, deployment.device)
         with self._guard:
             self.deployments[model_id] = deployment
 

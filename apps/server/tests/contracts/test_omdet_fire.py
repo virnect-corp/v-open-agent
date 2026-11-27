@@ -94,7 +94,7 @@ def test_loader_picks_the_family_and_prompts_with_manifest_labels(tmp_path: Path
     root, manifest = weights(tmp_path, "omdet-turbo")
     seen: list[tuple[str, ...]] = []
 
-    def omdet(folder: Path, labels: Any, floor: float) -> FakeDetector:
+    def omdet(folder: Path, labels: Any, floor: float, device: str) -> FakeDetector:
         seen.append(tuple(labels))
         return FakeDetector(tuple(labels))
 
