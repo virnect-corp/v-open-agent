@@ -157,5 +157,42 @@ services:
     ports:
       - "127.0.0.1:8765:8765"
 
+  # GPU 서버 (TASK-50). NVIDIA GPU가 있는 PC에서 `docker compose --profile server-cuda up server-cuda`
+  # - server-vision 과 같고 torch가 CUDA 빌드이며 모델을 GPU에 올린다(VOA_INFERENCE_DEVICE=cuda).
+  server-cuda:
+    profiles: ["server-cuda"]
+    image: v-open-agent:server-cuda
+    user: "1000:1000"
+    build:
+      <<: *server-build
+      target: server-cuda
+    working_dir: /workspace/apps/server
+    command: ["python", "-m", "voa.server"]
+    gpus: all
+    environment:
+      PYTHONPATH: /workspace/apps/server/src
+      VOA_PROFILE: dev-mock
+      VOA_BIND: 0.0.0.0
+      VOA_EXPOSURE: loopback      # ports 가 호스트 127.0.0.1 로만 내보냄 (원격은 SSH 터널)
+      VOA_ALLOW_INSECURE_DEV: "false"
+      VOA_PORT: "8765"
+      VOA_DB_PATH: /data/voa.sqlite3
+      VOA_POLICY_PROFILE: ${VOA_POLICY_PROFILE:-config/profiles/indoor_research_v0.yaml}
+      VOA_DEFAULT_MISSION: ${VOA_DEFAULT_MISSION:-}
+      VOA_MODELS_DIR: ${VOA_MODELS_DIR:-config/models}
+      VOA_MODEL_WEIGHTS_DIR: /models
+      VOA_ACTIVE_CONFIG_DIR: /data/config
+      VOA_DEVICES_FILE: ${VOA_DEVICES_FILE:-config/devices.yaml}
+      VOA_INFERENCE_DEVICE: cuda
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HOME: /tmp
+    volumes:
+      - .:/workspace
+      - ${VOA_MODEL_WEIGHTS_HOST:-./apps/server/var/models}:/models:ro
+      - voa-data:/data
+    ports:
+      - "127.0.0.1:8765:8765"
+
 volumes:
   voa-data:

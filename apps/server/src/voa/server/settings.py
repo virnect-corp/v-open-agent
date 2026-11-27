@@ -34,6 +34,7 @@ DEFAULTS: dict[str, str] = {
     "VOA_REFRESH_TOKEN_TTL_S": "86400",
     "VOA_SESSION_SWEEP_INTERVAL_S": "60",
     "VOA_SESSION_IDLE_S": "120",
+    "VOA_INFERENCE_DEVICE": "cpu",
     "VOA_INPUT_QUEUE_MAX": "64",
     "VOA_METADATA_RETENTION_DAYS": "7",
     "VOA_RAW_MEDIA_STORAGE": "false",
@@ -86,6 +87,7 @@ class Settings:
     external_network: bool
     model_auto_download: bool
     signup_enabled: bool = True  # ADR-0011
+    inference_device: str = "cpu"  # TASK-50: cpu | cuda (server-cuda image)
     frame_max_bytes: int = 500_000  # SPEC 7.6
     frame_interval_ms: int = 333
     frame_sync_timeout_ms: int = 1000
@@ -136,6 +138,7 @@ class Settings:
             refresh_token_ttl_s=parse("VOA_REFRESH_TOKEN_TTL_S", int, 0),
             session_sweep_interval_s=parse("VOA_SESSION_SWEEP_INTERVAL_S", int, 0),
             session_idle_s=parse("VOA_SESSION_IDLE_S", int, 0),
+            inference_device=raw["VOA_INFERENCE_DEVICE"].strip(),
             input_queue_max=parse("VOA_INPUT_QUEUE_MAX", int, 0),
             metadata_retention_days=parse("VOA_METADATA_RETENTION_DAYS", int, 0),
             raw_media_storage=parse("VOA_RAW_MEDIA_STORAGE", _bool, True),
@@ -177,6 +180,8 @@ class Settings:
             bad.append("VOA_SESSION_SWEEP_INTERVAL_S")
         if self.session_idle_s <= 0:
             bad.append("VOA_SESSION_IDLE_S")
+        if self.inference_device not in ("cpu", "cuda"):
+            bad.append("VOA_INFERENCE_DEVICE")
         if self.input_queue_max < 1:
             bad.append("VOA_INPUT_QUEUE_MAX")
         if self.frame_max_bytes <= 0:

@@ -98,3 +98,16 @@ RUN python -c "import tomllib; o = tomllib.load(open('/tmp/pyproject.toml', 'rb'
  && pip install -r /tmp/rest.txt \
  && rm /tmp/torch.txt /tmp/rest.txt /tmp/pyproject.toml
 USER voa
+
+# GPU 서버 이미지 (TASK-50): server + vision 그룹, torch는 CUDA 12.4 빌드(휠에 CUDA 런타임 포함).
+# NVIDIA 드라이버와 Docker GPU 지원(WSL2 또는 nvidia-container-toolkit)이 있는 amd64 PC에서만 쓴다.
+# 실행: VOA_INFERENCE_DEVICE=cuda (compose server-cuda 서비스가 넣는다)
+FROM server AS server-cuda
+ARG TORCH_INDEX=https://download.pytorch.org/whl/cu124
+USER root
+COPY apps/server/pyproject.toml /tmp/pyproject.toml
+RUN python -c "import tomllib; o = tomllib.load(open('/tmp/pyproject.toml', 'rb'))['project']['optional-dependencies']; v = o['vision']; open('/tmp/torch.txt', 'w').write('\n'.join(r for r in v if r.startswith('torch'))); open('/tmp/rest.txt', 'w').write('\n'.join(r for r in v if not r.startswith('torch')))" \
+ && pip install --index-url "${TORCH_INDEX}" -r /tmp/torch.txt \
+ && pip install -r /tmp/rest.txt \
+ && rm /tmp/torch.txt /tmp/rest.txt /tmp/pyproject.toml
+USER voa

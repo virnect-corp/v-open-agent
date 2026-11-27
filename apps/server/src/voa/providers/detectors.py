@@ -16,20 +16,23 @@ from voa.providers.rtdetr import (
     Detector,
     ManifestLike,
     RtDetrProvider,
+    VisionUnavailable,
     WeightsError,
     verify_weights,
 )
 
-DetectorFactory = Callable[[Path, Sequence[str], float], Detector]
+DetectorFactory = Callable[[Path, Sequence[str], float, str], Detector]
 
 
-def _rtdetr(folder: Path, labels: Sequence[str], score_floor: float) -> Detector:
+def _rtdetr(folder: Path, labels: Sequence[str], score_floor: float, device: str) -> Detector:
     from voa.providers.rtdetr import TransformersRtDetr
 
-    return TransformersRtDetr(folder, score_floor)
+    return TransformersRtDetr(folder, score_floor, device)
 
 
-def _omdet(folder: Path, labels: Sequence[str], score_floor: float) -> Detector:
+def _omdet(folder: Path, labels: Sequence[str], score_floor: float, device: str) -> Detector:
+    if device != "cpu":  # exploration model only (ADR-0008 C1a): CPU
+        raise VisionUnavailable("OmDet-Turbo runs on the CPU only")
     from voa.providers.omdet import TransformersOmDet
 
     return TransformersOmDet(folder, labels, score_floor)
@@ -56,6 +59,7 @@ def load_detector(
     stream_id: str = "camera_0",
     score_floor: float = DEFAULT_SCORE_FLOOR,
     factories: Mapping[str, DetectorFactory] = FACTORIES,
+    device: str = "cpu",
 ) -> RtDetrProvider:
     """Verify the weights, choose the detector family, and wrap it as a provider."""
     if manifest.kind != "object_detection":
@@ -69,7 +73,7 @@ def load_detector(
         raise WeightsError(f"{manifest.model_id}: unsupported model_type")
     labels = tuple(manifest.labels)
     return RtDetrProvider(
-        factory(folder, labels, score_floor),
+        factory(folder, labels, score_floor, device),
         model_id=manifest.model_id,
         revision=manifest.revision,
         labels=labels,

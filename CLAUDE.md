@@ -31,6 +31,7 @@
   scripts/dev.sh pytest -q apps/server/tests/contracts  # 임의 명령
   docker compose --profile server up server  # 서버 실행 (TASK-16 이후), http://127.0.0.1:8765
   VOA_DEFAULT_MISSION=fire_c1 docker compose --profile server-vision up server-vision  # 실모델 서버(CPU torch), 프레임 업로드 추론
+  docker compose --profile server-cuda up server-cuda  # GPU 서버(CUDA torch, NVIDIA GPU PC 전용, TASK-50)
   scripts/ui-test.sh                         # 관리자/시뮬 페이지 로직 테스트 (node 컨테이너, 네트워크 없음)
   scripts/vision.sh pytest -q -m model apps/server/tests/contracts/test_rtdetr_provider.py  # Stage C0 실모델 (ADR-0007)
   scripts/extract-frames.sh <video> <name> [fps]   # 영상 -> apps/server/var/frames/<name> (Docker ffmpeg)

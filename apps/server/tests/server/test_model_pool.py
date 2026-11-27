@@ -23,11 +23,15 @@ class SlowFactory:
 
     def __init__(self, fail_first: bool = False) -> None:
         self.calls = 0
+        self.devices: list[str] = []
         self.active: dict[str, int] = {}
         self.fail_first = fail_first
         self.lock = threading.Lock()
 
-    def __call__(self, manifest: ModelManifest, weights_root: Path) -> Detector:
+    def __call__(
+        self, manifest: ModelManifest, weights_root: Path, device: str = "cpu"
+    ) -> Detector:
+        self.devices.append(device)
         model_id = manifest.model_id
         with self.lock:
             self.calls += 1
@@ -97,3 +101,35 @@ def test_different_models_load_independently() -> None:
         thread.join()
     assert factory.calls == 2 and len(loaded) == 2
     assert time.monotonic() - begin < 0.6  # in parallel, not one after the other (0.4 s)
+
+
+def test_models_load_on_the_configured_device_and_move_when_redeployed() -> None:
+    from voa.server.inference import Deployment
+
+    factory = SlowFactory()
+    models = pool(factory)
+    models.default_device = "cuda"
+    first = models.detector("mock-detector")
+    assert factory.devices == ["cuda"] and models.deployments["mock-detector"].device == "cuda"
+    assert models.detector("mock-detector") is first  # cached on its device
+    models.deploy("mock-detector", Deployment(device="cpu", score_floor=0.4))
+    assert factory.devices == ["cuda", "cpu"]  # reloaded on the new device
+    assert models.deployments["mock-detector"] == Deployment(device="cpu", score_floor=0.4)
+    assert models.detector("mock-detector") is not first
+
+
+def test_a_gpu_the_image_cannot_use_is_device_unavailable_not_a_weights_problem() -> None:
+    from voa.providers.rtdetr import VisionUnavailable
+    from voa.server.admin import _no_gpu
+
+    def no_gpu(manifest: ModelManifest, weights_root: Path, device: str = "cpu") -> Detector:
+        if device == "cuda":
+            raise VisionUnavailable("no GPU")
+        return Detector()
+
+    models = pool(SlowFactory())
+    models.factory = no_gpu
+    with pytest.raises(ModelUnavailable) as raised:
+        models.detector("mock-detector", "cuda")
+    assert _no_gpu(raised.value)
+    assert models.detector("mock-detector", "cpu") is not None
